@@ -24,6 +24,10 @@ pub struct Watch {
     pub id: u64,
     pub user_id: u64,
     pub channel_id: u64,
+    /// Scopes the moderator view: an admin of one server has no business
+    /// seeing, or stopping, what someone set up in another.
+    #[serde(default)]
+    pub guild_id: Option<u64>,
     pub query: String,
     pub created_at: i64,
     pub last_checked_at: i64,
@@ -48,6 +52,16 @@ impl Watch {
     }
 }
 
+/// What a caller supplies to open a watch; the rest is bookkeeping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewWatch {
+    pub user_id: u64,
+    pub channel_id: u64,
+    pub guild_id: Option<u64>,
+    pub query: String,
+    pub lang: Lang,
+}
+
 /// Why a watch could not be created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RejectedWatch {
@@ -66,31 +80,31 @@ pub struct State {
 impl State {
     pub fn add(
         &mut self,
-        user_id: u64,
-        channel_id: u64,
-        query: &str,
-        lang: Lang,
+        new: NewWatch,
         now: i64,
         max_per_user: usize,
     ) -> Result<&Watch, RejectedWatch> {
+        let mine = |w: &&Watch| w.user_id == new.user_id;
         if self
             .watches
             .iter()
-            .any(|w| w.user_id == user_id && w.query == query)
+            .filter(mine)
+            .any(|w| w.query == new.query)
         {
             return Err(RejectedWatch::AlreadyWatching);
         }
-        if self.watches.iter().filter(|w| w.user_id == user_id).count() >= max_per_user {
+        if self.watches.iter().filter(mine).count() >= max_per_user {
             return Err(RejectedWatch::TooMany);
         }
 
         self.next_id += 1;
         self.watches.push(Watch {
             id: self.next_id,
-            user_id,
-            channel_id,
-            query: query.to_owned(),
-            lang,
+            user_id: new.user_id,
+            channel_id: new.channel_id,
+            guild_id: new.guild_id,
+            query: new.query,
+            lang: new.lang,
             notified_at: None,
             created_at: now,
             // Not due until a full interval has passed: the search just ran.
@@ -114,6 +128,24 @@ impl State {
             .iter()
             .filter(|w| w.user_id == user_id)
             .collect()
+    }
+
+    /// Everything running in one server, for the moderator view.
+    pub fn for_guild(&self, guild_id: u64) -> Vec<&Watch> {
+        self.watches
+            .iter()
+            .filter(|w| w.guild_id == Some(guild_id))
+            .collect()
+    }
+
+    /// Removes without checking ownership. Callers must have established that
+    /// the requester moderates the server the watch belongs to.
+    pub fn remove_within_guild(&mut self, id: u64, guild_id: u64) -> Option<Watch> {
+        let index = self
+            .watches
+            .iter()
+            .position(|w| w.id == id && w.guild_id == Some(guild_id))?;
+        Some(self.watches.remove(index))
     }
 
     pub fn due(&self, now: i64, interval: i64) -> Vec<Watch> {
@@ -226,11 +258,21 @@ mod tests {
 
     const HOUR: i64 = 3_600;
 
+    fn request(user_id: u64, guild_id: Option<u64>, query: &str, lang: Lang) -> NewWatch {
+        NewWatch {
+            user_id,
+            channel_id: 100,
+            guild_id,
+            query: query.to_owned(),
+            lang,
+        }
+    }
+
     fn state_with(entries: &[(u64, &str, i64)]) -> State {
         let mut state = State::default();
         for (user, query, now) in entries {
             state
-                .add(*user, 100, query, Lang::En, *now, 10)
+                .add(request(*user, Some(1), query, Lang::En), *now, 10)
                 .expect("accepted");
         }
         state
@@ -261,7 +303,7 @@ mod tests {
     fn the_same_query_cannot_be_watched_twice_by_one_user() {
         let mut state = state_with(&[(1, "dune", 0)]);
         assert_eq!(
-            state.add(1, 100, "dune", Lang::En, 0, 10),
+            state.add(request(1, Some(1), "dune", Lang::En), 0, 10),
             Err(RejectedWatch::AlreadyWatching)
         );
         assert_eq!(state.len(), 1);
@@ -270,21 +312,25 @@ mod tests {
     #[test]
     fn two_users_may_watch_the_same_query() {
         let mut state = state_with(&[(1, "dune", 0)]);
-        assert!(state.add(2, 100, "dune", Lang::En, 0, 10).is_ok());
+        assert!(
+            state
+                .add(request(2, Some(1), "dune", Lang::En), 0, 10)
+                .is_ok()
+        );
         assert_eq!(state.len(), 2);
     }
 
     #[test]
     fn a_user_is_capped_but_others_are_unaffected() {
         let mut state = State::default();
-        state.add(1, 100, "a", Lang::En, 0, 2).unwrap();
-        state.add(1, 100, "b", Lang::En, 0, 2).unwrap();
+        state.add(request(1, Some(1), "a", Lang::En), 0, 2).unwrap();
+        state.add(request(1, Some(1), "b", Lang::En), 0, 2).unwrap();
 
         assert_eq!(
-            state.add(1, 100, "c", Lang::En, 0, 2),
+            state.add(request(1, Some(1), "c", Lang::En), 0, 2),
             Err(RejectedWatch::TooMany)
         );
-        assert!(state.add(2, 100, "c", Lang::En, 0, 2).is_ok());
+        assert!(state.add(request(2, Some(1), "c", Lang::En), 0, 2).is_ok());
     }
 
     #[test]
@@ -409,6 +455,60 @@ mod tests {
         assert_eq!(state.len(), 1);
     }
 
+    #[test]
+    fn a_guild_view_shows_every_owner_but_only_that_guild() {
+        let mut state = State::default();
+        state
+            .add(request(1, Some(10), "dune", Lang::En), 0, 10)
+            .unwrap();
+        state
+            .add(request(2, Some(10), "hyperion", Lang::En), 0, 10)
+            .unwrap();
+        state
+            .add(request(3, Some(99), "elsewhere", Lang::En), 0, 10)
+            .unwrap();
+
+        let queries: Vec<&str> = state
+            .for_guild(10)
+            .iter()
+            .map(|w| w.query.as_str())
+            .collect();
+        assert_eq!(queries, ["dune", "hyperion"]);
+    }
+
+    #[test]
+    fn a_guild_view_ignores_watches_with_no_guild() {
+        let mut state = State::default();
+        state
+            .add(request(1, None, "direct message", Lang::En), 0, 10)
+            .unwrap();
+        assert!(state.for_guild(10).is_empty());
+    }
+
+    #[test]
+    fn a_moderator_can_stop_someone_elses_watch() {
+        let mut state = State::default();
+        state
+            .add(request(1, Some(10), "dune", Lang::En), 0, 10)
+            .unwrap();
+        let id = state.for_guild(10)[0].id;
+
+        assert_eq!(state.remove_within_guild(id, 10).unwrap().query, "dune");
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn a_moderator_cannot_reach_into_another_guild() {
+        let mut state = State::default();
+        state
+            .add(request(1, Some(99), "dune", Lang::En), 0, 10)
+            .unwrap();
+        let id = state.for_guild(99)[0].id;
+
+        assert!(state.remove_within_guild(id, 10).is_none());
+        assert_eq!(state.len(), 1);
+    }
+
     #[tokio::test]
     async fn a_missing_file_loads_as_an_empty_watchlist() {
         let dir = tempfile::tempdir().unwrap();
@@ -424,10 +524,13 @@ mod tests {
         let path = dir.path().join("watchlist.json");
 
         let list = Watchlist::load(&path).await.unwrap();
-        list.update(|s| s.add(7, 100, "dune", Lang::En, 1_000, 10).map(|w| w.id))
-            .await
-            .unwrap()
-            .unwrap();
+        list.update(|s| {
+            s.add(request(7, Some(1), "dune", Lang::En), 1_000, 10)
+                .map(|w| w.id)
+        })
+        .await
+        .unwrap()
+        .unwrap();
 
         let reloaded = Watchlist::load(&path).await.unwrap();
         let watches = reloaded
@@ -444,15 +547,21 @@ mod tests {
         let path = dir.path().join("watchlist.json");
 
         let list = Watchlist::load(&path).await.unwrap();
-        list.update(|s| s.add(1, 100, "a", Lang::En, 0, 10).map(|w| w.id))
-            .await
-            .unwrap()
-            .unwrap();
+        list.update(|s| {
+            s.add(request(1, Some(1), "a", Lang::En), 0, 10)
+                .map(|w| w.id)
+        })
+        .await
+        .unwrap()
+        .unwrap();
         list.update(|s| s.remove(1, 1)).await.unwrap();
 
         let reloaded = Watchlist::load(&path).await.unwrap();
         let id = reloaded
-            .update(|s| s.add(1, 100, "b", Lang::En, 0, 10).map(|w| w.id))
+            .update(|s| {
+                s.add(request(1, Some(1), "b", Lang::En), 0, 10)
+                    .map(|w| w.id)
+            })
             .await
             .unwrap()
             .unwrap();
@@ -468,10 +577,13 @@ mod tests {
         let path = dir.path().join("nested/deeper/watchlist.json");
 
         let list = Watchlist::load(&path).await.unwrap();
-        list.update(|s| s.add(1, 100, "dune", Lang::En, 0, 10).map(|w| w.id))
-            .await
-            .unwrap()
-            .unwrap();
+        list.update(|s| {
+            s.add(request(1, Some(1), "dune", Lang::En), 0, 10)
+                .map(|w| w.id)
+        })
+        .await
+        .unwrap()
+        .unwrap();
         assert!(path.exists());
     }
 
@@ -493,10 +605,13 @@ mod tests {
         let path = dir.path().join("watchlist.json");
 
         let list = Watchlist::load(&path).await.unwrap();
-        list.update(|s| s.add(1, 100, "dune", Lang::Fr, 0, 10).map(|w| w.id))
-            .await
-            .unwrap()
-            .unwrap();
+        list.update(|s| {
+            s.add(request(1, Some(1), "dune", Lang::Fr), 0, 10)
+                .map(|w| w.id)
+        })
+        .await
+        .unwrap()
+        .unwrap();
 
         let reloaded = Watchlist::load(&path).await.unwrap();
         assert_eq!(reloaded.with(|s| s.for_user(1)[0].lang).await, Lang::Fr);

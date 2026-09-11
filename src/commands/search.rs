@@ -1,6 +1,6 @@
 use crate::i18n::Lang;
 use crate::prowlarr::Release;
-use crate::watchlist::{RejectedWatch, now_secs};
+use crate::watchlist::{NewWatch, RejectedWatch, now_secs};
 use crate::{Context, Error, ui};
 use poise::serenity_prelude as serenity;
 use std::time::Duration;
@@ -150,10 +150,13 @@ async fn offer_to_watch(ctx: Context<'_>, query: &str, lang: Lang) -> Result<(),
         .update(|state| {
             state
                 .add(
-                    ctx.author().id.get(),
-                    ctx.channel_id().get(),
-                    query,
-                    lang,
+                    NewWatch {
+                        user_id: ctx.author().id.get(),
+                        channel_id: ctx.channel_id().get(),
+                        guild_id: ctx.guild_id().map(|g| g.get()),
+                        query: query.to_owned(),
+                        lang,
+                    },
                     now_secs(),
                     data.config.watch_max_per_user,
                 )

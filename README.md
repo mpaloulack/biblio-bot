@@ -24,9 +24,11 @@ Discord language.
 | --- | --- |
 | `/search <query>` | Searches the configured categories, lists results by seeders, and offers a menu. Picking an entry sends it straight to qBittorrent. |
 | `/watchlist` | Lists the standing searches still running for you, and stops one. |
+| `/watchlist-all` | Moderators only: lists every standing search on the server, whoever started it, and stops any of them. |
 | `/status` | Checks that Prowlarr and qBittorrent answer, and shows which category and folder downloads will land in. |
 
-French users get `/livre`, `/veilles` and `/etat`, with French replies. The language follows
+French users get `/livre`, `/veilles`, `/veilles-serveur` and `/etat`, with
+French replies. The language follows
 each user's own Discord locale, so the same bot can serve both in one server.
 `DEFAULT_LOCALE` decides what everyone else gets.
 
@@ -46,6 +48,12 @@ thirty days, and the bot says so rather than going silent.
 
 `/watchlist` shows what is still running, how many times each has been checked
 and how long it has left, and lets you stop one.
+
+Anyone holding **Manage Server** also gets `/watchlist-all`, which lists every
+standing search on that server with its owner and can stop any of them. It is
+scoped to one server: a moderator never sees, or reaches, what was set up
+somewhere else. Discord hides the command from everyone else, and the bot
+re-checks the permission when it runs rather than trusting that.
 
 The list is a plain JSON file — readable and editable from the host — kept on
 the `/data` volume so it survives a restart.
