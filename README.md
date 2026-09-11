@@ -141,6 +141,17 @@ Coverage is measured over that testable surface — `src/main.rs` and
 
 ## Contributing
 
+`main` is protected: it takes a pull request, and CI has to be green before the
+merge button unlocks. Branches must be up to date with `main` and history stays
+linear (squash merge only).
+
+```bash
+git switch -c my-change
+# ...
+gh pr create --fill
+gh pr merge --squash --auto   # merges by itself once CI passes
+```
+
 Code, comments, commit messages, issues and documentation are in English. Only
 the strings Discord users read are translated, and they all live in `i18n.rs` —
 adding a language means adding a variant there and nowhere else.
