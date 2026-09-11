@@ -16,7 +16,8 @@ Discord language.
 
 ## Status
 
-`0.0.1` — beta. It works, the API surface may still move.
+`0.1.0` — beta. It runs, but the configuration surface may still move before
+1.0. See the [changelog](CHANGELOG.md).
 
 ## Commands
 
