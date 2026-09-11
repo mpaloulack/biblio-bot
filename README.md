@@ -105,6 +105,7 @@ mv .env.example .env
 | `WATCH_MAX_DAYS` | no | `30` | A standing search gives up after this many days, 1–365. |
 | `WATCH_MAX_PER_USER` | no | `10` | Per-user limit on standing searches, 1–100. |
 | `WATCHLIST_PATH` | no | `/data/watchlist.json` | Where the list is stored. The image already points this at its volume. |
+| `RUST_LOG` | no | `biblio_bot=info,serenity=warn` | Log filter. `biblio_bot=debug` shows each individual watch check. |
 
 ### 4. Run
 
@@ -129,6 +130,36 @@ The bot listens on nothing and only makes outbound connections, so it needs no
 published port. It does need to reach Prowlarr and qBittorrent: if those run in
 Docker on the same host, put all three on the same network and use service names
 instead of IP addresses.
+
+## Logs
+
+On startup the bot prints what it is actually configured to talk to, which is
+usually enough to spot a misconfiguration without reading the `.env`:
+
+```
+starting version=0.1.0
+prowlarr=http://prowlarr:9696 qbit=http://gluetun:8081 qbit_auth=none ...
+Prowlarr reachable version=2.5.2.5491
+qBittorrent reachable version=v5.2.3
+watchlist loaded watches=0 path=/data/watchlist.json
+```
+
+Secrets are never printed: the token, the API key and the qBittorrent password
+are reported only as present or absent. A test enforces that.
+
+At `info` you get every command invocation with its user and channel, every
+search with how many results it found, every download with where it landed, and
+one line per sweep:
+
+```
+sweep finished total=3 due=1 hits=0 misses=1 failures=0 expired=0 next_check_in_secs=21598
+```
+
+`next_check_in_secs` answers the usual question — a standing search is only
+retried a full interval after it was created, so with the default four checks a
+day the first one happens six hours later, not immediately.
+
+Set `RUST_LOG=biblio_bot=debug` to also see each individual check.
 
 ## The save path trap
 

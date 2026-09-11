@@ -30,7 +30,9 @@ pub async fn search(
         .prowlarr
         .search(&query, &data.config.search_categories, SEARCH_LIMIT)
         .await?;
+    let found = results.len();
     results.truncate(data.config.max_results);
+    tracing::info!(query = %query, found, offered = results.len(), "search completed");
 
     if results.is_empty() {
         return offer_to_watch(ctx, &query, lang).await;
@@ -80,7 +82,15 @@ pub async fn search(
     else {
         return Ok(());
     };
+    let clicked = std::time::Instant::now();
     let picked = ui::parse_selection(values, &results).ok_or(lang.invalid_selection())?;
+    tracing::info!(
+        query = %query,
+        title = %picked.title,
+        indexer = %picked.indexer,
+        size = picked.size,
+        "release picked"
+    );
 
     // Adding takes longer than the 3 s Discord allows for a response.
     interaction
@@ -88,9 +98,24 @@ pub async fn search(
         .await?;
 
     let embed = match send_to_client(ctx, picked).await {
-        Ok(save_path) => ui::added_embed(picked, &data.config.qbit_category, &save_path, lang),
-        Err(e) => ui::failed_embed(picked, &e.to_string(), lang),
+        Ok(save_path) => {
+            tracing::info!(
+                title = %picked.title,
+                category = %data.config.qbit_category,
+                save_path = %save_path,
+                "sent to qbittorrent"
+            );
+            ui::added_embed(picked, &data.config.qbit_category, &save_path, lang)
+        }
+        Err(e) => {
+            tracing::warn!(title = %picked.title, %e, "could not send to qbittorrent");
+            ui::failed_embed(picked, &e.to_string(), lang)
+        }
     };
+    tracing::debug!(
+        elapsed_ms = clicked.elapsed().as_millis(),
+        "answering the click"
+    );
 
     interaction
         .edit_response(
@@ -165,13 +190,26 @@ async fn offer_to_watch(ctx: Context<'_>, query: &str, lang: Lang) -> Result<(),
         .await?;
 
     let message = match outcome {
-        Ok(()) => lang.watch_created(
-            query,
-            data.config.watch_checks_per_day,
-            data.config.watch_max_days,
-        ),
-        Err(RejectedWatch::AlreadyWatching) => lang.watch_already(query),
-        Err(RejectedWatch::TooMany) => lang.watch_too_many(data.config.watch_max_per_user),
+        Ok(()) => {
+            tracing::info!(
+                query = %query,
+                user_id = ctx.author().id.get(),
+                channel = ctx.channel_id().get(),
+                "watch created"
+            );
+            lang.watch_created(
+                query,
+                data.config.watch_checks_per_day,
+                data.config.watch_max_days,
+            )
+        }
+        Err(reason) => {
+            tracing::info!(query = %query, ?reason, "watch refused");
+            match reason {
+                RejectedWatch::AlreadyWatching => lang.watch_already(query),
+                RejectedWatch::TooMany => lang.watch_too_many(data.config.watch_max_per_user),
+            }
+        }
     };
 
     interaction
