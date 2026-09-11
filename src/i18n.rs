@@ -192,6 +192,40 @@ impl Lang {
         }
     }
 
+    pub fn watchlist_admin_title(self) -> &'static str {
+        self.pick("All standing searches", "Toutes les recherches en cours")
+    }
+
+    pub fn watchlist_admin_empty(self) -> &'static str {
+        self.pick(
+            "Nobody on this server has a standing search.",
+            "Personne sur ce serveur n'a de recherche en cours.",
+        )
+    }
+
+    /// Discord does not render mentions inside a select menu option, so the
+    /// moderator view falls back to the raw id there.
+    pub fn watchlist_owner(self, user_id: u64) -> String {
+        match self {
+            Lang::En => format!("owner {user_id}"),
+            Lang::Fr => format!("propriétaire {user_id}"),
+        }
+    }
+
+    pub fn watchlist_more(self, hidden: usize) -> String {
+        match self {
+            Lang::En => format!("\n\n_…and {hidden} more, not shown._"),
+            Lang::Fr => format!("\n\n_…et {hidden} autre(s), non affichée(s)._"),
+        }
+    }
+
+    pub fn watch_stopped_for(self, query: &str, user_id: u64) -> String {
+        match self {
+            Lang::En => format!("Stopped **{query}** for <@{user_id}>."),
+            Lang::Fr => format!("J'ai arrêté **{query}** pour <@{user_id}>."),
+        }
+    }
+
     pub fn watchlist_placeholder(self) -> &'static str {
         self.pick("Pick a search to stop", "Choisis une recherche à arrêter")
     }
@@ -380,6 +414,20 @@ mod tests {
                 Lang::En.watchlist_placeholder().into(),
                 Lang::Fr.watchlist_placeholder().into(),
             ),
+            (
+                Lang::En.watchlist_admin_title().into(),
+                Lang::Fr.watchlist_admin_title().into(),
+            ),
+            (
+                Lang::En.watchlist_admin_empty().into(),
+                Lang::Fr.watchlist_admin_empty().into(),
+            ),
+            (Lang::En.watchlist_owner(7), Lang::Fr.watchlist_owner(7)),
+            (Lang::En.watchlist_more(3), Lang::Fr.watchlist_more(3)),
+            (
+                Lang::En.watch_stopped_for("q", 7),
+                Lang::Fr.watch_stopped_for("q", 7),
+            ),
         ];
 
         for (en, fr) in pairs {
@@ -408,6 +456,9 @@ mod tests {
             (Lang::Fr.watch_gave_up("dune", 30), vec!["dune", "30"]),
             (Lang::Fr.watch_stopped("dune"), vec!["dune"]),
             (Lang::Fr.watchlist_entry(3, 7), vec!["3", "7"]),
+            (Lang::Fr.watchlist_owner(4242), vec!["4242"]),
+            (Lang::Fr.watchlist_more(3), vec!["3"]),
+            (Lang::Fr.watch_stopped_for("dune", 7), vec!["dune", "<@7>"]),
         ];
 
         for (rendered, expected) in cases {

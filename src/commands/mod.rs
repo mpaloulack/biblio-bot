@@ -7,4 +7,4 @@ mod watchlist;
 
 pub use search::search;
 pub use status::status;
-pub use watchlist::watchlist;
+pub use watchlist::{watchlist, watchlist_all};

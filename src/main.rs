@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
                 commands::search(),
                 commands::status(),
                 commands::watchlist(),
+                commands::watchlist_all(),
             ],
             on_error: |error| Box::pin(on_error(error)),
             ..Default::default()
