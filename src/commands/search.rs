@@ -144,6 +144,12 @@ async fn offer_to_watch(ctx: Context<'_>, query: &str, lang: Lang) -> Result<(),
         return Ok(());
     };
 
+    // Discord allows three seconds to answer a click, and persisting the watch
+    // happens after that. Acknowledge first, then edit in the outcome.
+    interaction
+        .create_response(ctx, serenity::CreateInteractionResponse::Acknowledge)
+        .await?;
+
     let data = ctx.data();
     let outcome = data
         .watchlist
@@ -175,13 +181,11 @@ async fn offer_to_watch(ctx: Context<'_>, query: &str, lang: Lang) -> Result<(),
     };
 
     interaction
-        .create_response(
+        .edit_response(
             ctx,
-            serenity::CreateInteractionResponse::UpdateMessage(
-                serenity::CreateInteractionResponseMessage::new()
-                    .content(message)
-                    .components(vec![]),
-            ),
+            serenity::EditInteractionResponse::new()
+                .content(message)
+                .components(vec![]),
         )
         .await?;
     Ok(())

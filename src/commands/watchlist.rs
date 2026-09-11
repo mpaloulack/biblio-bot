@@ -88,6 +88,9 @@ async fn show_and_stop(
     }
 
     let custom_id = format!("unwatch:{}", ctx.id());
+    // Kept for the timeout edit below: an edit carrying neither content nor an
+    // embed is an empty message, which Discord rejects outright.
+    let listing = embed.clone();
     let handle = ctx
         .send(poise::CreateReply::default().embed(embed).components(
             vec![serenity::CreateActionRow::SelectMenu(
@@ -112,7 +115,13 @@ async fn show_and_stop(
 
     let Some(interaction) = interaction else {
         handle
-            .edit(ctx, poise::CreateReply::default().components(vec![]))
+            .edit(
+                ctx,
+                poise::CreateReply::default()
+                    .content(lang.selection_timed_out())
+                    .embed(listing)
+                    .components(vec![]),
+            )
             .await?;
         return Ok(());
     };
@@ -124,6 +133,11 @@ async fn show_and_stop(
     let Some(id) = values.first().and_then(|v| v.parse::<u64>().ok()) else {
         return Ok(());
     };
+
+    // Discord allows three seconds to answer a click; persisting comes after.
+    interaction
+        .create_response(ctx, serenity::CreateInteractionResponse::Acknowledge)
+        .await?;
 
     let removed = ctx
         .data()
@@ -141,14 +155,12 @@ async fn show_and_stop(
     };
 
     interaction
-        .create_response(
+        .edit_response(
             ctx,
-            serenity::CreateInteractionResponse::UpdateMessage(
-                serenity::CreateInteractionResponseMessage::new()
-                    .content(content)
-                    .embed(serenity::CreateEmbed::new().title(lang.watchlist_title()))
-                    .components(vec![]),
-            ),
+            serenity::EditInteractionResponse::new()
+                .content(content)
+                .embed(serenity::CreateEmbed::new().title(lang.watchlist_title()))
+                .components(vec![]),
         )
         .await?;
     Ok(())
