@@ -1,5 +1,6 @@
 use crate::i18n::Lang;
 use crate::prowlarr::Release;
+use crate::watchlist::{NewWatch, RejectedWatch, now_secs};
 use crate::{Context, Error, ui};
 use poise::serenity_prelude as serenity;
 use std::time::Duration;
@@ -32,13 +33,7 @@ pub async fn search(
     results.truncate(data.config.max_results);
 
     if results.is_empty() {
-        ctx.send(
-            poise::CreateReply::default()
-                .content(lang.no_results(&query))
-                .ephemeral(true),
-        )
-        .await?;
-        return Ok(());
+        return offer_to_watch(ctx, &query, lang).await;
     }
 
     let custom_id = format!("search:{}", ctx.id());
@@ -114,4 +109,80 @@ async fn send_to_client(ctx: Context<'_>, release: &Release) -> anyhow::Result<S
     data.qbit
         .add(&download, &data.config.qbit_category, None, false)
         .await
+}
+
+/// A search that found nothing can be left running instead of being retyped later.
+async fn offer_to_watch(ctx: Context<'_>, query: &str, lang: Lang) -> Result<(), Error> {
+    let custom_id = format!("watch:{}", ctx.id());
+    let handle = ctx
+        .send(
+            poise::CreateReply::default()
+                .content(lang.no_results(query))
+                .components(vec![ui::watch_button(&custom_id, lang)]),
+        )
+        .await?;
+
+    let interaction = serenity::ComponentInteractionCollector::new(ctx)
+        .author_id(ctx.author().id)
+        .channel_id(ctx.channel_id())
+        .timeout(SELECTION_TIMEOUT)
+        .filter({
+            let custom_id = custom_id.clone();
+            move |mci| mci.data.custom_id == custom_id
+        })
+        .await;
+
+    let Some(interaction) = interaction else {
+        handle
+            .edit(
+                ctx,
+                poise::CreateReply::default()
+                    .content(lang.no_results(query))
+                    .components(vec![]),
+            )
+            .await?;
+        return Ok(());
+    };
+
+    let data = ctx.data();
+    let outcome = data
+        .watchlist
+        .update(|state| {
+            state
+                .add(
+                    NewWatch {
+                        user_id: ctx.author().id.get(),
+                        channel_id: ctx.channel_id().get(),
+                        guild_id: ctx.guild_id().map(|g| g.get()),
+                        query: query.to_owned(),
+                        lang,
+                    },
+                    now_secs(),
+                    data.config.watch_max_per_user,
+                )
+                .map(|_| ())
+        })
+        .await?;
+
+    let message = match outcome {
+        Ok(()) => lang.watch_created(
+            query,
+            data.config.watch_checks_per_day,
+            data.config.watch_max_days,
+        ),
+        Err(RejectedWatch::AlreadyWatching) => lang.watch_already(query),
+        Err(RejectedWatch::TooMany) => lang.watch_too_many(data.config.watch_max_per_user),
+    };
+
+    interaction
+        .create_response(
+            ctx,
+            serenity::CreateInteractionResponse::UpdateMessage(
+                serenity::CreateInteractionResponseMessage::new()
+                    .content(message)
+                    .components(vec![]),
+            ),
+        )
+        .await?;
+    Ok(())
 }

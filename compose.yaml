@@ -6,5 +6,12 @@ services:
     container_name: biblio-bot
     restart: unless-stopped
     env_file: .env
+    volumes:
+      # Standing searches survive a restart. A named volume avoids the uid
+      # mismatch a bind mount would hit, since the bot runs as uid 10001.
+      - biblio-data:/data
     # The bot only makes outbound connections (Discord gateway, Prowlarr,
     # qBittorrent), so there is nothing to publish.
+
+volumes:
+  biblio-data:
