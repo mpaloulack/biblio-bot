@@ -87,15 +87,34 @@ pub async fn search(
         .create_response(ctx, serenity::CreateInteractionResponse::Acknowledge)
         .await?;
 
-    let embed = match send_to_client(ctx, picked).await {
-        Ok(save_path) => ui::added_embed(picked, &data.config.qbit_category, &save_path, lang),
-        Err(e) => ui::failed_embed(picked, &e.to_string(), lang),
+    let (embed, note) = match send_to_client(ctx, picked).await {
+        Ok(save_path) => {
+            // Downloading is what closes a standing search, so clear any the
+            // user was keeping for these words.
+            let fulfilled = data
+                .watchlist
+                .update(|state| state.fulfil(ctx.author().id.get(), &query))
+                .await?;
+            let note = fulfilled
+                .first()
+                .map(|watch| lang.watch_fulfilled(&watch.query))
+                .unwrap_or_default();
+            (
+                ui::added_embed(picked, &data.config.qbit_category, &save_path, lang),
+                note,
+            )
+        }
+        Err(e) => (
+            ui::failed_embed(picked, &e.to_string(), lang),
+            String::new(),
+        ),
     };
 
     interaction
         .edit_response(
             ctx,
             serenity::EditInteractionResponse::new()
+                .content(note)
                 .embed(embed)
                 .components(vec![]),
         )
