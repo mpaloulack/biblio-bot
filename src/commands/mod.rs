@@ -1,6 +1,5 @@
-//! Discord glue. Everything these commands decide lives in [`crate::ui`]; what
-//! is left here is the interaction lifecycle, which needs a live gateway and is
-//! therefore excluded from coverage.
+//! Interaction lifecycle only; the decisions live in [`crate::ui`]. Needs a
+//! live gateway to run, so it is excluded from coverage.
 
 mod search;
 mod status;

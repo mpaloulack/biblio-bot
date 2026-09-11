@@ -10,10 +10,9 @@ Discord language.
 
 > **Vibe coded.** This project was written by prompting an AI agent rather than
 > by typing it out, and it shows in the shape of the repository: heavy test
-> coverage, long explanatory comments, a lot of structure for a small bot. It is
-> used in production on my own server, the tests are real and the CI gate is
-> real — but read it with that in mind before trusting it with anything you
-> care about. Issues and corrections are welcome.
+> coverage and a lot of structure for a small bot. It runs on my own server, the
+> tests are real and the CI gate is real — but read it with that in mind before
+> trusting it with anything you care about. Issues and corrections are welcome.
 
 ## Status
 

@@ -1,8 +1,5 @@
-//! Presentation layer.
-//!
-//! Every builder here is a pure function of its inputs and of the viewer's
-//! language, which is what makes the bot testable: the Discord glue only has to
-//! wire these to an interaction.
+//! Pure builders. Keeping the decisions here is what makes them testable
+//! without a Discord connection.
 
 use crate::i18n::Lang;
 use crate::prowlarr::Release;
@@ -16,13 +13,12 @@ const GREEN: u32 = 0x2ecc71;
 const RED: u32 = 0xe74c3c;
 const GREY: u32 = 0x95a5a6;
 
-/// Results listed in the embed body; the rest stay reachable from the menu.
+/// Listed in the embed body; the rest stay reachable from the menu.
 const LISTED: usize = 10;
-/// Discord rejects select menu labels and descriptions beyond 100 characters.
+/// Discord rejects longer menu labels and descriptions.
 const LABEL_MAX: usize = 100;
 
-/// Truncates on a character boundary — release titles are full of accents, and
-/// slicing on bytes would panic halfway through one.
+/// On a character boundary: byte slicing panics on the accented titles.
 pub fn truncate(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_owned();
@@ -30,7 +26,6 @@ pub fn truncate(text: &str, max: usize) -> String {
     text.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
 }
 
-/// The search results, with the overflow announced rather than silently dropped.
 pub fn results_embed(query: &str, results: &[Release], lang: Lang) -> serenity::CreateEmbed {
     let lines = results
         .iter()
@@ -62,7 +57,6 @@ pub fn results_embed(query: &str, results: &[Release], lang: Lang) -> serenity::
         .colour(BLUE)
 }
 
-/// Same listing, greyed out, once the menu stopped accepting a choice.
 pub fn expired_embed(query: &str, results: &[Release], lang: Lang) -> serenity::CreateEmbed {
     results_embed(query, results, lang).colour(GREY)
 }
@@ -83,8 +77,7 @@ pub fn select_options(results: &[Release], lang: Lang) -> Vec<serenity::CreateSe
         .collect()
 }
 
-/// Resolves what the user picked. Values come from Discord, so an unparsable or
-/// out of range index is a possibility rather than an invariant.
+/// Values come from Discord, so an unusable index is expected, not an invariant.
 pub fn parse_selection<'a>(values: &[String], results: &'a [Release]) -> Option<&'a Release> {
     values
         .first()?
@@ -123,8 +116,7 @@ pub fn failed_embed(release: &Release, error: &str, lang: Lang) -> serenity::Cre
         .colour(RED)
 }
 
-/// Describes where a category actually writes, flagging the two cases that
-/// silently send downloads to the wrong place.
+/// Flags the two cases that silently write to the wrong place.
 pub fn destination_label(
     categories: &BTreeMap<String, Category>,
     category: &str,

@@ -1,4 +1,4 @@
-//! Bootstrap only: everything testable lives in the library crate.
+//! Bootstrap only; everything testable lives in the library crate.
 
 use anyhow::{Context as _, Result};
 use biblio_bot::{
@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // A missing .env is not an error: in a container everything comes from the environment.
+    // In a container everything comes from the environment instead.
     let _ = dotenvy::dotenv();
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
         config.qbit_pass.clone(),
     )?;
 
-    // Fail at startup rather than on the first command if a service is missing.
+    // Fail now rather than on the first command.
     let version = prowlarr
         .ping()
         .await
@@ -55,8 +55,8 @@ async fn main() -> Result<()> {
         .setup(move |ctx, ready, framework| {
             Box::pin(async move {
                 let registry = &framework.options().commands;
+                // Guild scoped is instant; global takes up to an hour to propagate.
                 match guild_id {
-                    // Guild scoped: available instantly, which is what you want while developing.
                     Some(id) => {
                         poise::builtins::register_in_guild(
                             ctx,
@@ -66,7 +66,6 @@ async fn main() -> Result<()> {
                         .await?;
                         tracing::info!(guild = id, "commands registered in guild");
                     }
-                    // Global: Discord takes up to an hour to propagate.
                     None => {
                         poise::builtins::register_globally(ctx, registry).await?;
                         tracing::info!("commands registered globally");
@@ -84,7 +83,6 @@ async fn main() -> Result<()> {
             .await
             .context("could not build the Discord client")?;
 
-    // Shut down cleanly so Discord does not keep the gateway session around.
     let shard_manager = Arc::clone(&client.shard_manager);
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {

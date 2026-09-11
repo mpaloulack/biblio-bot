@@ -2,30 +2,24 @@ use crate::i18n::Lang;
 use anyhow::{Context as _, Result, bail};
 use std::env;
 
-/// Discord caps a select menu at 25 entries.
-const MAX_SELECTABLE: usize = 25;
-/// Newznab category for Books/EBook.
-const DEFAULT_CATEGORY: u32 = 7020;
+const DISCORD_MENU_MAX: usize = 25;
+const BOOKS_EBOOK: u32 = 7020;
 
-/// Everything the bot needs, read from the environment once at startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub discord_token: String,
-    /// When set, commands register in this guild only — instantly, instead of
-    /// the global registration Discord can take an hour to propagate.
+    /// Set to register commands instantly in one guild instead of globally.
     pub guild_id: Option<u64>,
     pub prowlarr_url: String,
     pub prowlarr_api_key: String,
     pub qbit_url: String,
     pub qbit_user: Option<String>,
     pub qbit_pass: Option<String>,
-    /// qBittorrent category the downloads are filed under.
     pub qbit_category: String,
-    /// Newznab categories to search.
+    /// Newznab category ids.
     pub search_categories: Vec<u32>,
-    /// How many results to offer.
     pub max_results: usize,
-    /// Language used when a user's Discord locale is one we do not translate.
+    /// Used for locales we do not translate.
     pub default_locale: Lang,
 }
 
@@ -34,8 +28,7 @@ impl Config {
         Self::from_lookup(|key| env::var(key).ok())
     }
 
-    /// Reads from an arbitrary source, so tests never have to mutate the
-    /// process environment (which they share, and would race on).
+    /// Tests pass their own source rather than racing on the process environment.
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self> {
         let get = |key: &str| {
             lookup(key)
@@ -48,9 +41,11 @@ impl Config {
         let max_results = get("MAX_RESULTS")
             .map(|v| v.parse::<usize>().context("MAX_RESULTS must be an integer"))
             .transpose()?
-            .unwrap_or(MAX_SELECTABLE);
-        if !(1..=MAX_SELECTABLE).contains(&max_results) {
-            bail!("MAX_RESULTS must be between 1 and {MAX_SELECTABLE} (Discord select menu limit)");
+            .unwrap_or(DISCORD_MENU_MAX);
+        if !(1..=DISCORD_MENU_MAX).contains(&max_results) {
+            bail!(
+                "MAX_RESULTS must be between 1 and {DISCORD_MENU_MAX} (Discord select menu limit)"
+            );
         }
 
         Ok(Self {
@@ -86,7 +81,7 @@ fn strip_trailing_slash(url: &str) -> String {
 
 fn parse_categories(raw: Option<&str>) -> Result<Vec<u32>> {
     let Some(raw) = raw else {
-        return Ok(vec![DEFAULT_CATEGORY]);
+        return Ok(vec![BOOKS_EBOOK]);
     };
     let parsed: Vec<u32> = raw
         .split(',')
@@ -272,8 +267,6 @@ mod tests {
 
     #[test]
     fn from_env_delegates_to_the_process_environment() {
-        // The parsing itself is covered above; this pins the delegation so the
-        // two entry points cannot drift apart.
         let direct = Config::from_lookup(|key| std::env::var(key).ok());
         assert_eq!(direct.is_ok(), Config::from_env().is_ok());
     }

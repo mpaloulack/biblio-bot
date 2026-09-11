@@ -23,7 +23,7 @@ pub struct QBittorrent {
     http: reqwest::Client,
     base: String,
     credentials: Option<(String, String)>,
-    /// Logging in happens at most once; the SID cookie then lives in the client.
+    /// Logging in happens once; the SID cookie then lives in the client.
     session: OnceCell<()>,
 }
 
@@ -31,7 +31,7 @@ impl QBittorrent {
     pub fn new(base: &str, user: Option<String>, pass: Option<String>) -> Result<Self> {
         let base = base.trim_end_matches('/').to_owned();
         let mut headers = HeaderMap::new();
-        // qBittorrent's CSRF check rejects writes whose Referer does not match.
+        // CSRF check: writes are rejected if the Referer does not match.
         headers.insert(
             header::REFERER,
             HeaderValue::from_str(&base).context("invalid qBittorrent URL")?,
@@ -49,9 +49,7 @@ impl QBittorrent {
         })
     }
 
-    /// Authenticates when credentials are configured. Without them we rely on
-    /// qBittorrent's "bypass authentication for clients on localhost / whitelisted
-    /// subnets" setting, which is the common home-LAN setup.
+    /// No credentials means relying on qBittorrent's subnet auth bypass.
     async fn ensure_session(&self) -> Result<()> {
         self.session
             .get_or_try_init(|| async {
@@ -105,12 +103,11 @@ impl QBittorrent {
             .context("unexpected categories payload")
     }
 
-    /// Queues a download and returns the save path it was filed under.
+    /// Returns the save path used.
     ///
-    /// The path is sent explicitly on purpose. qBittorrent only applies a
-    /// category's save path when Automatic Torrent Management is enabled, and it
-    /// is off by default — so a torrent added with just a category silently lands
-    /// in the default folder instead. Looking the path up ourselves avoids that.
+    /// The path must be sent explicitly: qBittorrent only honours a category's
+    /// save path when Automatic Torrent Management is on, and it is off by
+    /// default, so a category alone silently lands in the default folder.
     pub async fn add(
         &self,
         download: &Download,
@@ -135,7 +132,7 @@ impl QBittorrent {
             form = form.text("savepath", resolved.clone());
         }
         if paused {
-            // `paused` is the qBittorrent 4.x spelling, `stopped` the 5.x one.
+            // `paused` is 4.x, `stopped` is 5.x.
             form = form.text("paused", "true").text("stopped", "true");
         }
         form = match download {
@@ -172,7 +169,7 @@ fn reject_forbidden(resp: &reqwest::Response) -> Result<()> {
     Ok(())
 }
 
-/// qBittorrent 4.x answers `Ok.`; 5.x answers a JSON result object.
+/// 4.x answers `Ok.`, 5.x a JSON result object.
 fn add_succeeded(body: &str) -> bool {
     let body = body.trim();
     if body.is_empty() || body.contains("Ok") {
@@ -369,7 +366,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(saved, "/elsewhere");
-        // No category lookup is needed when the caller already knows the path.
         let looked_up = server
             .received_requests()
             .await
@@ -549,7 +545,6 @@ mod tests {
         mock_categories(&server, "/data/ebooks").await;
 
         let client = authenticated(&server);
-        // Twice on purpose: the session must be established only once.
         client.categories().await.unwrap();
         client.categories().await.unwrap();
     }

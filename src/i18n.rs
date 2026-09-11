@@ -1,8 +1,5 @@
-//! User-facing strings, in English and French.
-//!
-//! Discord tells us which locale the invoking user has selected, so the same
-//! bot answers each person in their own language. Code, logs and errors aimed at
-//! the operator stay in English; only what a Discord user reads is translated.
+//! Every string a Discord user reads. Operator-facing logs and errors stay
+//! in English and do not belong here.
 
 use std::fmt;
 use std::str::FromStr;
@@ -15,8 +12,7 @@ pub enum Lang {
 }
 
 impl Lang {
-    /// Maps a Discord locale (`en-US`, `en-GB`, `fr`…) to a supported language,
-    /// falling back to `default` for every locale we do not translate.
+    /// `en-US`, `fr`… anything untranslated falls back to `default`.
     pub fn from_locale(locale: Option<&str>, default: Lang) -> Self {
         match locale {
             Some(l) if l.starts_with("fr") => Lang::Fr,
@@ -46,7 +42,6 @@ impl Lang {
         }
     }
 
-    /// Short summary shown under each menu entry.
     pub fn release_summary(self, size: &str, seeders: u32, indexer: &str) -> String {
         match self {
             Lang::En => format!("{size} · {seeders} seeders · {indexer}"),
@@ -191,7 +186,6 @@ mod tests {
 
     #[test]
     fn every_string_differs_between_the_two_languages() {
-        // Guards against a translation silently falling back to English.
         let pairs: Vec<(String, String)> = vec![
             (Lang::En.no_results("q"), Lang::Fr.no_results("q")),
             (Lang::En.more_in_menu(3), Lang::Fr.more_in_menu(3)),

@@ -3,11 +3,9 @@ use reqwest::header::{self, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use std::time::Duration;
 
-/// How many redirects to follow before giving up on a download link.
 const MAX_REDIRECTS: usize = 5;
 const TIMEOUT: Duration = Duration::from_secs(60);
 
-/// A single search result as Prowlarr returns it.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Release {
@@ -26,7 +24,6 @@ pub struct Release {
     pub protocol: String,
 }
 
-/// What we hand over to the torrent client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Download {
     Torrent(Vec<u8>),
@@ -36,9 +33,7 @@ pub enum Download {
 #[derive(Debug, Clone)]
 pub struct Prowlarr {
     http: reqwest::Client,
-    /// Separate client that does not follow redirects, so a `Location:` pointing
-    /// at a `magnet:` URI can be read instead of making reqwest choke on a
-    /// scheme it cannot request.
+    /// Does not follow redirects: reqwest cannot request a `magnet:` Location.
     downloader: reqwest::Client,
     base: String,
 }
@@ -66,7 +61,6 @@ impl Prowlarr {
         })
     }
 
-    /// Confirms the instance answers and accepts the API key.
     pub async fn ping(&self) -> Result<String> {
         #[derive(Deserialize)]
         struct Status {
@@ -89,7 +83,7 @@ impl Prowlarr {
         Ok(status.version)
     }
 
-    /// Searches the given Newznab categories, best seeded first.
+    /// Best seeded first.
     pub async fn search(
         &self,
         query: &str,
@@ -121,9 +115,7 @@ impl Prowlarr {
         Ok(releases)
     }
 
-    /// Fetches the `.torrent` through Prowlarr, which replays the indexer
-    /// authentication for us. Redirects are followed by hand so that an indexer
-    /// answering with a magnet link still works.
+    /// Goes through Prowlarr so the indexer authentication is replayed for us.
     pub async fn fetch(&self, release: &Release) -> Result<Download> {
         let mut url = release
             .download_url
@@ -149,8 +141,7 @@ impl Prowlarr {
                     .get(header::LOCATION)
                     .and_then(|v| v.to_str().ok())
                     .context("redirect without a usable Location header")?;
-                // Location may legitimately be relative; resolving it against the
-                // current URL also leaves an absolute magnet link untouched.
+                // Location may be relative; joining leaves an absolute magnet intact.
                 url = reqwest::Url::parse(&url)
                     .context("unparsable download link")?
                     .join(location)
@@ -264,7 +255,6 @@ mod tests {
 
     #[tokio::test]
     async fn ping_reports_an_unreachable_host() {
-        // Port 1 is reserved and nothing listens on it.
         let error = Prowlarr::new("http://127.0.0.1:1", "key")
             .unwrap()
             .ping()
@@ -426,7 +416,6 @@ mod tests {
             .mount(&server)
             .await;
 
-        // The Location header is relative and must be resolved against the current URL.
         let release = release_with(Some(&format!("{}/download", server.uri())), None);
         assert_eq!(
             client(&server).fetch(&release).await.unwrap(),

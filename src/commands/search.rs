@@ -4,9 +4,8 @@ use crate::{Context, Error, ui};
 use poise::serenity_prelude as serenity;
 use std::time::Duration;
 
-/// How long the select menu keeps accepting a choice.
 const SELECTION_TIMEOUT: Duration = Duration::from_secs(120);
-/// Asked of Prowlarr; the list is then trimmed to what a menu can show.
+/// Asked of Prowlarr before trimming to `max_results`.
 const SEARCH_LIMIT: u32 = 100;
 
 /// Search for an ebook and send it to qBittorrent.
@@ -70,7 +69,6 @@ pub async fn search(
         .await;
 
     let Some(interaction) = interaction else {
-        // Nobody is going to pick now; drop the menu so it cannot be clicked dead.
         handle
             .edit(
                 ctx,
@@ -89,7 +87,7 @@ pub async fn search(
     };
     let picked = ui::parse_selection(values, &results).ok_or(lang.invalid_selection())?;
 
-    // Adding takes longer than the three seconds Discord allows for a response.
+    // Adding takes longer than the 3 s Discord allows for a response.
     interaction
         .create_response(ctx, serenity::CreateInteractionResponse::Acknowledge)
         .await?;
