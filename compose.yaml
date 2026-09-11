@@ -1,0 +1,10 @@
+services:
+  biblio-bot:
+    image: ghcr.io/mpaloulack/biblio-bot:latest
+    # To build from a checkout instead of pulling the published image:
+    # build: .
+    container_name: biblio-bot
+    restart: unless-stopped
+    env_file: .env
+    # The bot only makes outbound connections (Discord gateway, Prowlarr,
+    # qBittorrent), so there is nothing to publish.
