@@ -1,6 +1,8 @@
 use crate::i18n::Lang;
+use crate::watchlist::SECONDS_PER_DAY;
 use anyhow::{Context as _, Result, bail};
 use std::env;
+use std::path::PathBuf;
 
 const DISCORD_MENU_MAX: usize = 25;
 const BOOKS_EBOOK: u32 = 7020;
@@ -21,6 +23,22 @@ pub struct Config {
     pub max_results: usize,
     /// Used for locales we do not translate.
     pub default_locale: Lang,
+    /// How often a standing search is retried, per day.
+    pub watch_checks_per_day: u32,
+    /// A standing search gives up after this many days.
+    pub watch_max_days: i64,
+    pub watch_max_per_user: usize,
+    pub watchlist_path: PathBuf,
+}
+
+impl Config {
+    pub fn watch_interval_secs(&self) -> i64 {
+        SECONDS_PER_DAY / i64::from(self.watch_checks_per_day)
+    }
+
+    pub fn watch_max_age_secs(&self) -> i64 {
+        self.watch_max_days * SECONDS_PER_DAY
+    }
 }
 
 impl Config {
@@ -48,6 +66,20 @@ impl Config {
             );
         }
 
+        let bounded = |key: &str, default: u64, min: u64, max: u64| -> Result<u64> {
+            let value = get(key)
+                .map(|v| {
+                    v.parse::<u64>()
+                        .with_context(|| format!("{key} must be an integer"))
+                })
+                .transpose()?
+                .unwrap_or(default);
+            if !(min..=max).contains(&value) {
+                bail!("{key} must be between {min} and {max}");
+            }
+            Ok(value)
+        };
+
         Ok(Self {
             discord_token: required("DISCORD_TOKEN")?,
             guild_id: get("DISCORD_GUILD_ID")
@@ -71,6 +103,13 @@ impl Config {
                 })
                 .transpose()?
                 .unwrap_or_default(),
+            // A day has to divide into whole intervals, so cap at 24.
+            watch_checks_per_day: bounded("WATCH_CHECKS_PER_DAY", 4, 1, 24)? as u32,
+            watch_max_days: bounded("WATCH_MAX_DAYS", 30, 1, 365)? as i64,
+            watch_max_per_user: bounded("WATCH_MAX_PER_USER", 10, 1, 100)? as usize,
+            watchlist_path: get("WATCHLIST_PATH")
+                .unwrap_or_else(|| "data/watchlist.json".to_owned())
+                .into(),
         })
     }
 }
@@ -125,6 +164,10 @@ mod tests {
         assert_eq!(config.search_categories, vec![7020]);
         assert_eq!(config.max_results, 25);
         assert_eq!(config.default_locale, Lang::En);
+        assert_eq!(config.watch_checks_per_day, 4);
+        assert_eq!(config.watch_max_days, 30);
+        assert_eq!(config.watch_max_per_user, 10);
+        assert_eq!(config.watchlist_path, PathBuf::from("data/watchlist.json"));
         assert_eq!(config.guild_id, None);
         assert_eq!(config.qbit_user, None);
     }
@@ -269,6 +312,68 @@ mod tests {
     fn from_env_delegates_to_the_process_environment() {
         let direct = Config::from_lookup(|key| std::env::var(key).ok());
         assert_eq!(direct.is_ok(), Config::from_env().is_ok());
+    }
+
+    #[test]
+    fn the_check_interval_divides_the_day() {
+        let mut vars = minimal();
+        vars.insert("WATCH_CHECKS_PER_DAY", "4");
+        assert_eq!(build(&vars).unwrap().watch_interval_secs(), 6 * 3_600);
+
+        vars.insert("WATCH_CHECKS_PER_DAY", "24");
+        assert_eq!(build(&vars).unwrap().watch_interval_secs(), 3_600);
+
+        vars.insert("WATCH_CHECKS_PER_DAY", "1");
+        assert_eq!(build(&vars).unwrap().watch_interval_secs(), 86_400);
+    }
+
+    #[test]
+    fn the_maximum_age_is_expressed_in_seconds() {
+        let mut vars = minimal();
+        vars.insert("WATCH_MAX_DAYS", "7");
+        assert_eq!(build(&vars).unwrap().watch_max_age_secs(), 7 * 86_400);
+    }
+
+    #[test]
+    fn watch_settings_are_bounded() {
+        let cases = [
+            ("WATCH_CHECKS_PER_DAY", ["0", "25"]),
+            ("WATCH_MAX_DAYS", ["0", "366"]),
+            ("WATCH_MAX_PER_USER", ["0", "101"]),
+        ];
+        for (key, invalid) in cases {
+            for value in invalid {
+                let mut vars = minimal();
+                vars.insert(key, value);
+                let error = build(&vars).unwrap_err().to_string();
+                assert!(
+                    error.contains(key),
+                    "{key}={value} should be rejected, got: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_non_numeric_watch_setting_is_rejected() {
+        let mut vars = minimal();
+        vars.insert("WATCH_CHECKS_PER_DAY", "often");
+        assert!(
+            build(&vars)
+                .unwrap_err()
+                .to_string()
+                .contains("must be an integer")
+        );
+    }
+
+    #[test]
+    fn the_watchlist_path_can_be_moved() {
+        let mut vars = minimal();
+        vars.insert("WATCHLIST_PATH", "/var/lib/biblio/watches.json");
+        assert_eq!(
+            build(&vars).unwrap().watchlist_path,
+            PathBuf::from("/var/lib/biblio/watches.json")
+        );
     }
 
     #[test]

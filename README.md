@@ -23,11 +23,32 @@ Discord language.
 | Command | What it does |
 | --- | --- |
 | `/search <query>` | Searches the configured categories, lists results by seeders, and offers a menu. Picking an entry sends it straight to qBittorrent. |
+| `/watchlist` | Lists the standing searches still running for you, and stops one. |
 | `/status` | Checks that Prowlarr and qBittorrent answer, and shows which category and folder downloads will land in. |
 
-French users get `/livre` and `/etat`, with French replies. The language follows
+French users get `/livre`, `/veilles` and `/etat`, with French replies. The language follows
 each user's own Discord locale, so the same bot can serve both in one server.
 `DEFAULT_LOCALE` decides what everyone else gets.
+
+## Standing searches
+
+A book that is not out yet returns nothing, and retyping the same search every
+week is exactly the kind of thing a bot should do instead.
+
+When `/search` finds nothing, it offers a button. Press it and the bot keeps
+looking on its own — four times a day by default — and posts in the channel,
+mentioning you, as soon as something turns up.
+
+The entry stays on your list after that: it is removed when you actually
+**download** the book, not when it is found, so a notification you missed does
+not quietly disappear. A search that never finds anything is dropped after
+thirty days, and the bot says so rather than going silent.
+
+`/watchlist` shows what is still running, how many times each has been checked
+and how long it has left, and lets you stop one.
+
+The list is a plain JSON file — readable and editable from the host — kept on
+the `/data` volume so it survives a restart.
 
 ## Requirements
 
@@ -71,6 +92,10 @@ mv .env.example .env
 | `SEARCH_CATEGORIES` | no | `7020` | Newznab categories, comma separated. `7020` Books/EBook, `7000` Books, `7030` Comics, `7040` Technical, `3030` Audiobook. |
 | `MAX_RESULTS` | no | `25` | Results offered, 1–25 (Discord's select menu limit). |
 | `DEFAULT_LOCALE` | no | `en` | Language for users whose Discord locale is neither English nor French. |
+| `WATCH_CHECKS_PER_DAY` | no | `4` | How often each standing search is retried, 1–24. |
+| `WATCH_MAX_DAYS` | no | `30` | A standing search gives up after this many days, 1–365. |
+| `WATCH_MAX_PER_USER` | no | `10` | Per-user limit on standing searches, 1–100. |
+| `WATCHLIST_PATH` | no | `/data/watchlist.json` | Where the list is stored. The image already points this at its volume. |
 
 ### 4. Run
 
@@ -82,8 +107,11 @@ Or without compose:
 
 ```bash
 docker run -d --name biblio-bot --restart unless-stopped \
-  --env-file .env ghcr.io/mpaloulack/biblio-bot:latest
+  --env-file .env -v biblio-data:/data ghcr.io/mpaloulack/biblio-bot:latest
 ```
+
+The `/data` volume holds the standing searches. Without it they are lost on
+every restart; everything else the bot does is stateless.
 
 Images are published for `linux/amd64` and `linux/arm64`. Tags: `latest` for the
 newest release, `X.Y.Z` to pin one, `edge` for the tip of `main`.
@@ -126,18 +154,21 @@ src/
   i18n.rs          every user-facing string, English and French
   prowlarr.rs      search and .torrent retrieval
   qbittorrent.rs   session, categories, adding downloads
+  watchlist.rs     standing searches: scheduling rules and storage
   ui.rs            embeds and menus — pure functions
   commands/        Discord interaction lifecycle
+  watcher.rs       background sweep over due searches
 ```
 
-The split is deliberate: `commands/` holds the gateway glue, which cannot run
-without a live Discord connection, and delegates every decision it makes to
-`ui.rs`. Everything else is unit tested against a mock HTTP server, including
-both qBittorrent API generations and the redirect handling for magnet links.
+The split is deliberate: `commands/` and `watcher.rs` hold the gateway glue,
+which cannot run without a live Discord connection, and delegate every decision
+they make to `ui.rs` and `watchlist.rs`. Everything else is unit tested against
+a mock HTTP server, including both qBittorrent API generations, the redirect
+handling for magnet links, and the scheduling rules for standing searches.
 
-Coverage is measured over that testable surface — `src/main.rs` and
-`src/commands/` are excluded — and CI fails below 95%. It currently sits at
-100% of lines and functions.
+Coverage is measured over that testable surface — `src/main.rs`, `src/commands/`
+and `src/watcher.rs` are excluded — and CI fails below 95%. It currently sits at
+99.8% of lines.
 
 ## Contributing
 

@@ -7,11 +7,14 @@ pub mod i18n;
 pub mod prowlarr;
 pub mod qbittorrent;
 pub mod ui;
+pub mod watcher;
+pub mod watchlist;
 
 pub struct Data {
     pub config: config::Config,
     pub prowlarr: prowlarr::Prowlarr,
     pub qbit: qbittorrent::QBittorrent,
+    pub watchlist: std::sync::Arc<watchlist::Watchlist>,
 }
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;

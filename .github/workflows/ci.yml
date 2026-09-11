@@ -32,9 +32,8 @@ jobs:
 
       - uses: taiki-e/install-action@cargo-llvm-cov
 
-      # Fails the build below 95% line coverage. src/main.rs and src/commands/
-      # are excluded: they are Discord gateway glue that cannot run without a
-      # live connection, and the decisions they make live in src/ui.rs.
+      # Fails the build below 95% line coverage. The Discord gateway glue is
+      # excluded; see scripts/coverage.sh for which files and why.
       - name: Coverage
         run: ./scripts/coverage.sh --summary-only
 

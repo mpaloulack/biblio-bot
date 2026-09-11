@@ -4,6 +4,7 @@
 use crate::i18n::Lang;
 use crate::prowlarr::Release;
 use crate::qbittorrent::Category;
+use crate::watchlist::{SECONDS_PER_DAY, Watch};
 use humansize::{DECIMAL, format_size};
 use poise::serenity_prelude as serenity;
 use std::collections::BTreeMap;
@@ -127,6 +128,63 @@ pub fn destination_label(
         Some(_) => lang.no_save_path().to_owned(),
         None => lang.category_missing(category),
     }
+}
+
+/// Offered when a search comes back empty, so the user can leave it running.
+pub fn watch_button(custom_id: &str, lang: Lang) -> serenity::CreateActionRow {
+    serenity::CreateActionRow::Buttons(vec![
+        serenity::CreateButton::new(custom_id)
+            .style(serenity::ButtonStyle::Primary)
+            .emoji('🔔')
+            .label(lang.watch_button()),
+    ])
+}
+
+/// Rounded up, so a watch with a few hours left still reads as one day rather
+/// than as zero.
+pub fn days_left(watch: &Watch, now: i64, max_age: i64) -> i64 {
+    // i64::div_ceil is still unstable; remaining is never negative here.
+    let remaining = (watch.created_at + max_age - now).max(0);
+    (remaining + SECONDS_PER_DAY - 1) / SECONDS_PER_DAY
+}
+
+pub fn watchlist_embed(
+    watches: &[Watch],
+    now: i64,
+    max_age: i64,
+    lang: Lang,
+) -> serenity::CreateEmbed {
+    let embed = serenity::CreateEmbed::new()
+        .title(lang.watchlist_title())
+        .colour(BLUE);
+    if watches.is_empty() {
+        return embed.description(lang.watchlist_empty()).colour(GREY);
+    }
+
+    embed.description(
+        watches
+            .iter()
+            .map(|w| {
+                let state = if w.notified_at.is_some() {
+                    format!("🔔 {}", lang.watchlist_waiting())
+                } else {
+                    lang.watchlist_entry(w.checks, days_left(w, now, max_age))
+                };
+                format!("**{}**\n     {state}", truncate(&w.query, 80))
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+pub fn watchlist_options(watches: &[Watch], lang: Lang) -> Vec<serenity::CreateSelectMenuOption> {
+    watches
+        .iter()
+        .map(|w| {
+            serenity::CreateSelectMenuOption::new(truncate(&w.query, LABEL_MAX), w.id.to_string())
+                .description(truncate(&lang.watchlist_entry(w.checks, 0), LABEL_MAX))
+        })
+        .collect()
 }
 
 pub fn status_embed(
@@ -421,6 +479,132 @@ mod tests {
     fn destination_label_warns_when_the_category_is_missing() {
         assert!(destination_label(&BTreeMap::new(), "ebooks", Lang::En).contains("does not exist"));
         assert!(destination_label(&BTreeMap::new(), "ebooks", Lang::Fr).contains("absente"));
+    }
+
+    fn watch(query: &str, created_at: i64, checks: u32) -> Watch {
+        Watch {
+            id: 1,
+            user_id: 42,
+            channel_id: 100,
+            query: query.to_owned(),
+            created_at,
+            last_checked_at: created_at,
+            checks,
+            lang: Lang::En,
+            notified_at: None,
+        }
+    }
+
+    #[test]
+    fn the_watch_button_carries_the_custom_id_and_is_translated() {
+        let value = serde_json::to_value(watch_button("watch:7", Lang::Fr)).unwrap();
+        let button = &value["components"][0];
+
+        assert_eq!(button["custom_id"], "watch:7");
+        assert_eq!(button["label"], Lang::Fr.watch_button());
+    }
+
+    #[test]
+    fn days_left_rounds_up_so_it_never_reads_as_zero_too_early() {
+        let w = watch("dune", 0, 0);
+        let max_age = 30 * SECONDS_PER_DAY;
+
+        assert_eq!(days_left(&w, 0, max_age), 30);
+        assert_eq!(days_left(&w, 29 * SECONDS_PER_DAY, max_age), 1);
+        // Still twelve hours to go: that is one day, not none.
+        assert_eq!(days_left(&w, 30 * SECONDS_PER_DAY - 43_200, max_age), 1);
+    }
+
+    #[test]
+    fn days_left_never_goes_negative() {
+        let w = watch("dune", 0, 0);
+        assert_eq!(
+            days_left(&w, 999 * SECONDS_PER_DAY, 30 * SECONDS_PER_DAY),
+            0
+        );
+    }
+
+    #[test]
+    fn an_empty_watchlist_explains_how_to_create_one() {
+        let value = json(watchlist_embed(&[], 0, SECONDS_PER_DAY, Lang::En));
+
+        assert_eq!(value["color"], GREY);
+        assert!(
+            value["description"]
+                .as_str()
+                .unwrap()
+                .contains("no standing search")
+        );
+    }
+
+    #[test]
+    fn a_watchlist_lists_each_query_with_its_progress() {
+        let watches = [watch("dune", 0, 3), watch("hyperion", 0, 1)];
+        let value = json(watchlist_embed(&watches, 0, 30 * SECONDS_PER_DAY, Lang::En));
+        let description = value["description"].as_str().unwrap();
+
+        assert_eq!(value["color"], BLUE);
+        assert!(description.contains("dune"));
+        assert!(description.contains("hyperion"));
+        assert!(
+            description.contains("checked 3 times"),
+            "got: {description}"
+        );
+        assert!(description.contains("30 days left"));
+    }
+
+    #[test]
+    fn a_found_watch_is_marked_as_waiting_for_the_download() {
+        let mut found = watch("dune", 0, 3);
+        found.notified_at = Some(100);
+        let value = json(watchlist_embed(&[found], 0, 30 * SECONDS_PER_DAY, Lang::En));
+        let description = value["description"].as_str().unwrap();
+
+        assert!(
+            description.contains("waiting for your download"),
+            "got: {description}"
+        );
+        assert!(!description.contains("checked 3 times"));
+    }
+
+    #[test]
+    fn the_watchlist_is_translated() {
+        let watches = [watch("dune", 0, 3)];
+        let value = json(watchlist_embed(&watches, 0, 30 * SECONDS_PER_DAY, Lang::Fr));
+
+        assert_eq!(value["title"], Lang::Fr.watchlist_title());
+        assert!(
+            value["description"]
+                .as_str()
+                .unwrap()
+                .contains("vérifiée 3 fois")
+        );
+    }
+
+    #[test]
+    fn watchlist_options_are_keyed_by_watch_id() {
+        let mut second = watch("hyperion", 0, 0);
+        second.id = 9;
+        let value =
+            serde_json::to_value(watchlist_options(&[watch("dune", 0, 0), second], Lang::En))
+                .unwrap();
+
+        assert_eq!(value[0]["value"], "1");
+        assert_eq!(value[1]["value"], "9");
+        assert_eq!(value[1]["label"], "hyperion");
+    }
+
+    #[test]
+    fn watchlist_options_respect_the_discord_length_limit() {
+        let value = serde_json::to_value(watchlist_options(
+            &[watch(&"z".repeat(250), 0, 0)],
+            Lang::En,
+        ))
+        .unwrap();
+        assert_eq!(
+            value[0]["label"].as_str().unwrap().chars().count(),
+            LABEL_MAX
+        );
     }
 
     #[test]

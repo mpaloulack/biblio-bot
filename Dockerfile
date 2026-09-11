@@ -29,9 +29,15 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# The bot writes nothing to disk, so there is no reason for it to run as root.
-RUN useradd --system --create-home --uid 10001 biblio
+# Standing searches are the only thing written to disk, and /data is expected
+# to be a volume. Nothing here needs root.
+RUN useradd --system --create-home --uid 10001 biblio \
+    && mkdir -p /data \
+    && chown biblio:biblio /data
 USER biblio
+WORKDIR /data
+VOLUME ["/data"]
+ENV WATCHLIST_PATH=/data/watchlist.json
 
 COPY --from=builder /build/target/release/biblio-bot /usr/local/bin/biblio-bot
 

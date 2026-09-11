@@ -1,10 +1,12 @@
 //! Every string a Discord user reads. Operator-facing logs and errors stay
 //! in English and do not belong here.
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Lang {
     #[default]
     En,
@@ -102,6 +104,105 @@ impl Lang {
         )
     }
 
+    pub fn watch_button(self) -> &'static str {
+        self.pick("Tell me when it shows up", "Me prévenir quand il arrive")
+    }
+
+    pub fn watch_created(self, query: &str, per_day: u32, days: i64) -> String {
+        match self {
+            Lang::En => format!(
+                "Watching **{query}**. I will look {per_day} times a day and post here as soon as \
+                 something turns up, or give up after {days} days."
+            ),
+            Lang::Fr => format!(
+                "Je surveille **{query}**. Je chercherai {per_day} fois par jour et je poste ici \
+                 dès que quelque chose sort, sinon j'abandonne au bout de {days} jours."
+            ),
+        }
+    }
+
+    pub fn watch_already(self, query: &str) -> String {
+        match self {
+            Lang::En => format!("You are already watching **{query}**."),
+            Lang::Fr => format!("Tu surveilles déjà **{query}**."),
+        }
+    }
+
+    pub fn watch_too_many(self, max: usize) -> String {
+        match self {
+            Lang::En => {
+                format!("You already have {max} searches running. Stop one with `/watchlist`.")
+            }
+            Lang::Fr => {
+                format!("Tu as déjà {max} recherches en cours. Arrêtes-en une avec `/watchlist`.")
+            }
+        }
+    }
+
+    pub fn watch_found(self, query: &str) -> String {
+        match self {
+            Lang::En => format!(
+                "**{query}** turned up. Run the search again to download it — I will drop it \
+                 from your watchlist once you do."
+            ),
+            Lang::Fr => format!(
+                "**{query}** est sorti. Relance la recherche pour le télécharger — je le \
+                 retirerai de tes veilles à ce moment-là."
+            ),
+        }
+    }
+
+    pub fn watch_fulfilled(self, query: &str) -> String {
+        match self {
+            Lang::En => format!("Removed **{query}** from your watchlist."),
+            Lang::Fr => format!("J'ai retiré **{query}** de tes veilles."),
+        }
+    }
+
+    /// Shown in the listing for a watch whose book has already been found.
+    pub fn watchlist_waiting(self) -> &'static str {
+        self.pick(
+            "found · waiting for your download",
+            "trouvé · en attente de téléchargement",
+        )
+    }
+
+    pub fn watch_gave_up(self, query: &str, days: i64) -> String {
+        match self {
+            Lang::En => format!("Gave up on **{query}**: nothing turned up in {days} days."),
+            Lang::Fr => format!("J'abandonne **{query}** : rien n'est sorti en {days} jours."),
+        }
+    }
+
+    pub fn watchlist_title(self) -> &'static str {
+        self.pick("Your standing searches", "Tes recherches en cours")
+    }
+
+    pub fn watchlist_empty(self) -> &'static str {
+        self.pick(
+            "You have no standing search. Run a search that finds nothing to start one.",
+            "Tu n'as aucune recherche en cours. Lances-en une qui ne trouve rien pour en créer une.",
+        )
+    }
+
+    pub fn watchlist_entry(self, checks: u32, days_left: i64) -> String {
+        match self {
+            Lang::En => format!("checked {checks} times · {days_left} days left"),
+            Lang::Fr => format!("vérifiée {checks} fois · encore {days_left} jours"),
+        }
+    }
+
+    pub fn watchlist_placeholder(self) -> &'static str {
+        self.pick("Pick a search to stop", "Choisis une recherche à arrêter")
+    }
+
+    pub fn watch_stopped(self, query: &str) -> String {
+        match self {
+            Lang::En => format!("Stopped watching **{query}**."),
+            Lang::Fr => format!("J'arrête de surveiller **{query}**."),
+        }
+    }
+
     pub fn category_missing(self, category: &str) -> String {
         match self {
             Lang::En => format!("⚠️ category `{category}` does not exist in qBittorrent"),
@@ -179,6 +280,15 @@ mod tests {
     }
 
     #[test]
+    fn a_language_round_trips_through_json() {
+        for lang in [Lang::En, Lang::Fr] {
+            let encoded = serde_json::to_string(&lang).unwrap();
+            assert_eq!(serde_json::from_str::<Lang>(&encoded).unwrap(), lang);
+        }
+        assert_eq!(serde_json::to_string(&Lang::Fr).unwrap(), "\"fr\"");
+    }
+
+    #[test]
     fn a_language_renders_as_its_code() {
         assert_eq!(Lang::En.to_string(), "en");
         assert_eq!(Lang::Fr.to_string(), "fr");
@@ -186,12 +296,14 @@ mod tests {
 
     #[test]
     fn every_string_differs_between_the_two_languages() {
+        // A translation that silently falls back to English would read as a bug
+        // to a French user, and nothing else would catch it.
         let pairs: Vec<(String, String)> = vec![
             (Lang::En.no_results("q"), Lang::Fr.no_results("q")),
             (Lang::En.more_in_menu(3), Lang::Fr.more_in_menu(3)),
             (
-                Lang::En.release_summary("1 kB", 4, "idx"),
-                Lang::Fr.release_summary("1 kB", 4, "idx"),
+                Lang::En.release_summary("1 kB", 4, "i"),
+                Lang::Fr.release_summary("1 kB", 4, "i"),
             ),
             (
                 Lang::En.menu_placeholder().into(),
@@ -231,6 +343,43 @@ mod tests {
                 Lang::En.category_missing("c"),
                 Lang::Fr.category_missing("c"),
             ),
+            (
+                Lang::En.watch_button().into(),
+                Lang::Fr.watch_button().into(),
+            ),
+            (
+                Lang::En.watch_created("q", 4, 30),
+                Lang::Fr.watch_created("q", 4, 30),
+            ),
+            (Lang::En.watch_already("q"), Lang::Fr.watch_already("q")),
+            (Lang::En.watch_too_many(10), Lang::Fr.watch_too_many(10)),
+            (Lang::En.watch_found("q"), Lang::Fr.watch_found("q")),
+            (Lang::En.watch_fulfilled("q"), Lang::Fr.watch_fulfilled("q")),
+            (
+                Lang::En.watch_gave_up("q", 30),
+                Lang::Fr.watch_gave_up("q", 30),
+            ),
+            (Lang::En.watch_stopped("q"), Lang::Fr.watch_stopped("q")),
+            (
+                Lang::En.watchlist_title().into(),
+                Lang::Fr.watchlist_title().into(),
+            ),
+            (
+                Lang::En.watchlist_empty().into(),
+                Lang::Fr.watchlist_empty().into(),
+            ),
+            (
+                Lang::En.watchlist_entry(3, 7),
+                Lang::Fr.watchlist_entry(3, 7),
+            ),
+            (
+                Lang::En.watchlist_waiting().into(),
+                Lang::Fr.watchlist_waiting().into(),
+            ),
+            (
+                Lang::En.watchlist_placeholder().into(),
+                Lang::Fr.watchlist_placeholder().into(),
+            ),
         ];
 
         for (en, fr) in pairs {
@@ -240,19 +389,35 @@ mod tests {
 
     #[test]
     fn interpolated_values_survive_translation() {
-        assert!(Lang::Fr.no_results("dune").contains("dune"));
-        assert!(Lang::Fr.more_in_menu(7).contains('7'));
-        assert!(Lang::Fr.category_missing("ebooks").contains("ebooks"));
-        assert!(
-            Lang::Fr
-                .release_summary("930 kB", 40, "C411")
-                .contains("930 kB")
-        );
-        assert!(
-            Lang::Fr
-                .release_summary("930 kB", 40, "C411")
-                .contains("C411")
-        );
+        let cases: Vec<(String, Vec<&str>)> = vec![
+            (Lang::Fr.no_results("dune"), vec!["dune"]),
+            (Lang::Fr.more_in_menu(7), vec!["7"]),
+            (
+                Lang::Fr.release_summary("930 kB", 40, "C411"),
+                vec!["930 kB", "40", "C411"],
+            ),
+            (Lang::Fr.category_missing("ebooks"), vec!["ebooks"]),
+            (
+                Lang::Fr.watch_created("dune", 4, 30),
+                vec!["dune", "4", "30"],
+            ),
+            (Lang::Fr.watch_already("dune"), vec!["dune"]),
+            (Lang::Fr.watch_too_many(10), vec!["10"]),
+            (Lang::Fr.watch_found("dune"), vec!["dune"]),
+            (Lang::Fr.watch_fulfilled("dune"), vec!["dune"]),
+            (Lang::Fr.watch_gave_up("dune", 30), vec!["dune", "30"]),
+            (Lang::Fr.watch_stopped("dune"), vec!["dune"]),
+            (Lang::Fr.watchlist_entry(3, 7), vec!["3", "7"]),
+        ];
+
+        for (rendered, expected) in cases {
+            for value in expected {
+                assert!(
+                    rendered.contains(value),
+                    "{value} is missing from: {rendered}"
+                );
+            }
+        }
     }
 
     #[test]

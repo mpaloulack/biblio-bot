@@ -1,8 +1,9 @@
 //! Bootstrap only; everything testable lives in the library crate.
 
 use anyhow::{Context as _, Result};
+use biblio_bot::watchlist::Watchlist;
 use biblio_bot::{
-    Data, Error, commands, config::Config, prowlarr::Prowlarr, qbittorrent::QBittorrent,
+    Data, Error, commands, config::Config, prowlarr::Prowlarr, qbittorrent::QBittorrent, watcher,
 };
 use poise::serenity_prelude as serenity;
 use std::sync::Arc;
@@ -38,17 +39,31 @@ async fn main() -> Result<()> {
         .context("qBittorrent unreachable at startup")?;
     tracing::info!(%version, "qBittorrent reachable");
 
+    let watchlist = Arc::new(Watchlist::load(&config.watchlist_path).await?);
+    tracing::info!(
+        watches = watchlist.with(|s| s.len()).await,
+        path = %config.watchlist_path.display(),
+        "watchlist loaded"
+    );
+
     let token = config.discord_token.clone();
     let guild_id = config.guild_id;
+    // Moved into the setup closure, which is where a gateway http client exists.
+    let sweep = (prowlarr.clone(), Arc::clone(&watchlist), config.clone());
     let data = Data {
         config,
         prowlarr,
         qbit,
+        watchlist,
     };
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![commands::search(), commands::status()],
+            commands: vec![
+                commands::search(),
+                commands::status(),
+                commands::watchlist(),
+            ],
             on_error: |error| Box::pin(on_error(error)),
             ..Default::default()
         })
@@ -71,6 +86,9 @@ async fn main() -> Result<()> {
                         tracing::info!("commands registered globally");
                     }
                 }
+                let (prowlarr, watchlist, config) = sweep;
+                tokio::spawn(watcher::run(ctx.http.clone(), prowlarr, watchlist, config));
+
                 tracing::info!(bot = %ready.user.name, "connected");
                 Ok(data)
             })
