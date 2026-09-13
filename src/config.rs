@@ -35,6 +35,37 @@ pub struct Config {
 }
 
 impl Config {
+    /// What the bot is actually configured to talk to, for the startup log.
+    ///
+    /// Secrets are reported as present or absent, never echoed: this line ends
+    /// up in container logs, which people paste into issues.
+    pub fn summary(&self) -> String {
+        format!(
+            "prowlarr={} qbit={} qbit_auth={} category={} categories={:?} \
+             locale={} guild={} max_results={} watch={}/day max_days={} \
+             max_per_user={} watchlist={} download_check={}s downloads={}",
+            self.prowlarr_url,
+            self.qbit_url,
+            if self.qbit_user.is_some() && self.qbit_pass.is_some() {
+                "credentials"
+            } else {
+                "none (relying on qBittorrent's subnet bypass)"
+            },
+            self.qbit_category,
+            self.search_categories,
+            self.default_locale,
+            self.guild_id
+                .map_or_else(|| "global".to_owned(), |id| id.to_string()),
+            self.max_results,
+            self.watch_checks_per_day,
+            self.watch_max_days,
+            self.watch_max_per_user,
+            self.watchlist_path.display(),
+            self.download_check_interval_secs,
+            self.downloads_path.display(),
+        )
+    }
+
     pub fn watch_interval_secs(&self) -> i64 {
         SECONDS_PER_DAY / i64::from(self.watch_checks_per_day)
     }
@@ -322,6 +353,63 @@ mod tests {
     fn from_env_delegates_to_the_process_environment() {
         let direct = Config::from_lookup(|key| std::env::var(key).ok());
         assert_eq!(direct.is_ok(), Config::from_env().is_ok());
+    }
+
+    #[test]
+    fn the_summary_reports_what_the_bot_will_talk_to() {
+        let summary = build(&minimal()).unwrap().summary();
+
+        assert!(
+            summary.contains("prowlarr=http://prowlarr:9696"),
+            "got: {summary}"
+        );
+        assert!(summary.contains("qbit=http://qbit:8081"));
+        assert!(summary.contains("category=ebooks"));
+        assert!(summary.contains("watch=4/day"));
+        assert!(summary.contains("guild=global"));
+        assert!(summary.contains("download_check=300s"));
+        assert!(summary.contains("downloads=data/downloads.json"));
+    }
+
+    #[test]
+    fn the_summary_never_echoes_a_secret() {
+        let mut vars = minimal();
+        vars.insert("DISCORD_TOKEN", "TOKEN-must-not-leak");
+        vars.insert("PROWLARR_API_KEY", "APIKEY-must-not-leak");
+        vars.insert("QBIT_USER", "admin");
+        vars.insert("QBIT_PASS", "PASSWORD-must-not-leak");
+
+        let summary = build(&vars).unwrap().summary();
+        for secret in [
+            "TOKEN-must-not-leak",
+            "APIKEY-must-not-leak",
+            "PASSWORD-must-not-leak",
+        ] {
+            assert!(!summary.contains(secret), "{secret} leaked into: {summary}");
+        }
+        assert!(summary.contains("qbit_auth=credentials"));
+    }
+
+    #[test]
+    fn the_summary_says_when_no_credentials_are_set() {
+        assert!(
+            build(&minimal())
+                .unwrap()
+                .summary()
+                .contains("qbit_auth=none")
+        );
+    }
+
+    #[test]
+    fn the_summary_names_the_guild_when_scoped() {
+        let mut vars = minimal();
+        vars.insert("DISCORD_GUILD_ID", "655831756498403334");
+        assert!(
+            build(&vars)
+                .unwrap()
+                .summary()
+                .contains("guild=655831756498403334")
+        );
     }
 
     #[test]

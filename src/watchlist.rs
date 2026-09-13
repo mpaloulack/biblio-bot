@@ -175,6 +175,17 @@ impl State {
         fulfilled
     }
 
+    /// Seconds until the earliest watch is checked again, ignoring the ones
+    /// already found and waiting on their owner. `None` when nothing is
+    /// searching. Exists so the logs can say why nothing is happening yet.
+    pub fn seconds_until_next_due(&self, now: i64, interval: i64) -> Option<i64> {
+        self.watches
+            .iter()
+            .filter(|w| w.notified_at.is_none())
+            .map(|w| (w.last_checked_at + interval - now).max(0))
+            .min()
+    }
+
     pub fn mark_checked(&mut self, id: u64, now: i64) {
         if let Some(watch) = self.watches.iter_mut().find(|w| w.id == id) {
             watch.last_checked_at = now;
@@ -369,6 +380,47 @@ mod tests {
         assert!(state.due(HOUR, HOUR).is_empty());
         assert_eq!(state.for_user(1)[0].checks, 1);
         assert_eq!(state.due(2 * HOUR, HOUR).len(), 1);
+    }
+
+    #[test]
+    fn the_next_check_is_a_full_interval_after_creation() {
+        let state = state_with(&[(1, "dune", 1_000)]);
+        assert_eq!(state.seconds_until_next_due(1_000, HOUR), Some(HOUR));
+        assert_eq!(
+            state.seconds_until_next_due(1_000 + HOUR / 2, HOUR),
+            Some(HOUR / 2)
+        );
+    }
+
+    #[test]
+    fn the_next_check_is_the_soonest_of_all_watches() {
+        let mut state = State::default();
+        state
+            .add(request(1, Some(1), "late", Lang::En), 1_000, 10)
+            .unwrap();
+        state
+            .add(request(1, Some(1), "soon", Lang::En), 500, 10)
+            .unwrap();
+
+        assert_eq!(state.seconds_until_next_due(1_000, HOUR), Some(HOUR - 500));
+    }
+
+    #[test]
+    fn an_overdue_watch_reports_zero_rather_than_a_negative() {
+        let state = state_with(&[(1, "dune", 0)]);
+        assert_eq!(state.seconds_until_next_due(10 * HOUR, HOUR), Some(0));
+    }
+
+    #[test]
+    fn a_watch_waiting_on_its_owner_is_not_counted() {
+        let mut state = state_with(&[(1, "dune", 0)]);
+        state.mark_notified(state.for_user(1)[0].id, 0);
+        assert_eq!(state.seconds_until_next_due(0, HOUR), None);
+    }
+
+    #[test]
+    fn an_empty_watchlist_has_no_next_check() {
+        assert_eq!(State::default().seconds_until_next_due(0, HOUR), None);
     }
 
     #[test]
