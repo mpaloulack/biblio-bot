@@ -29,6 +29,9 @@ pub struct Config {
     pub watch_max_days: i64,
     pub watch_max_per_user: usize,
     pub watchlist_path: PathBuf,
+    /// How often a tracked download is checked for having finished seeding.
+    pub download_check_interval_secs: i64,
+    pub downloads_path: PathBuf,
 }
 
 impl Config {
@@ -110,6 +113,11 @@ impl Config {
             watchlist_path: get("WATCHLIST_PATH")
                 .unwrap_or_else(|| "data/watchlist.json".to_owned())
                 .into(),
+            download_check_interval_secs: bounded("DOWNLOAD_CHECK_INTERVAL_SECS", 300, 60, 3_600)?
+                as i64,
+            downloads_path: get("DOWNLOADS_PATH")
+                .unwrap_or_else(|| "data/downloads.json".to_owned())
+                .into(),
         })
     }
 }
@@ -170,6 +178,8 @@ mod tests {
         assert_eq!(config.watchlist_path, PathBuf::from("data/watchlist.json"));
         assert_eq!(config.guild_id, None);
         assert_eq!(config.qbit_user, None);
+        assert_eq!(config.download_check_interval_secs, 300);
+        assert_eq!(config.downloads_path, PathBuf::from("data/downloads.json"));
     }
 
     #[test]
@@ -340,6 +350,7 @@ mod tests {
             ("WATCH_CHECKS_PER_DAY", ["0", "25"]),
             ("WATCH_MAX_DAYS", ["0", "366"]),
             ("WATCH_MAX_PER_USER", ["0", "101"]),
+            ("DOWNLOAD_CHECK_INTERVAL_SECS", ["59", "3601"]),
         ];
         for (key, invalid) in cases {
             for value in invalid {
@@ -373,6 +384,16 @@ mod tests {
         assert_eq!(
             build(&vars).unwrap().watchlist_path,
             PathBuf::from("/var/lib/biblio/watches.json")
+        );
+    }
+
+    #[test]
+    fn the_downloads_path_can_be_moved() {
+        let mut vars = minimal();
+        vars.insert("DOWNLOADS_PATH", "/var/lib/biblio/downloads.json");
+        assert_eq!(
+            build(&vars).unwrap().downloads_path,
+            PathBuf::from("/var/lib/biblio/downloads.json")
         );
     }
 

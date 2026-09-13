@@ -243,6 +243,80 @@ impl Lang {
             Lang::Fr => format!("⚠️ catégorie `{category}` absente de qBittorrent"),
         }
     }
+
+    pub fn download_ready(self, title: &str) -> String {
+        match self {
+            Lang::En => format!("📬 **{title}** is done downloading and is now seeding."),
+            Lang::Fr => format!("📬 **{title}** a fini de télécharger et partage maintenant."),
+        }
+    }
+
+    pub fn stuck_none(self) -> &'static str {
+        self.pick(
+            "You have nothing downloading right now.",
+            "Tu n'as aucun téléchargement en cours.",
+        )
+    }
+
+    pub fn stuck_title(self) -> &'static str {
+        self.pick("Your downloads", "Tes téléchargements")
+    }
+
+    pub fn stuck_placeholder(self) -> &'static str {
+        self.pick("Pick a download", "Choisis un téléchargement")
+    }
+
+    pub fn stuck_already_flagged(self) -> &'static str {
+        self.pick("🐢 already flagged as stuck", "🐢 déjà signalé bloqué")
+    }
+
+    pub fn stuck_marked(self, title: &str) -> String {
+        match self {
+            Lang::En => format!(
+                "🐢 Flagged **{title}** as stuck. I will remind you about it once a day \
+                 until you resolve it — run `/stuck` again to remove it or search for another release."
+            ),
+            Lang::Fr => format!(
+                "🐢 **{title}** est signalé bloqué. Je te le rappellerai une fois par jour \
+                 tant que ce n'est pas résolu — relance `/stuck` pour le retirer ou chercher un autre fichier."
+            ),
+        }
+    }
+
+    pub fn stuck_prompt(self, title: &str) -> String {
+        match self {
+            Lang::En => format!("What do you want to do with **{title}**?"),
+            Lang::Fr => format!("Qu'est-ce qu'on fait de **{title}** ?"),
+        }
+    }
+
+    pub fn stuck_search_again_button(self) -> &'static str {
+        self.pick("Search again", "Chercher autre chose")
+    }
+
+    pub fn stuck_remove_button(self) -> &'static str {
+        self.pick("Remove", "Retirer")
+    }
+
+    pub fn stuck_removed(self, title: &str) -> String {
+        match self {
+            Lang::En => format!("🗑️ Removed **{title}**."),
+            Lang::Fr => format!("🗑️ **{title}** a été retiré."),
+        }
+    }
+
+    pub fn stuck_digest_title(self) -> &'static str {
+        self.pick("⏳ Still stuck", "⏳ Toujours bloqué")
+    }
+
+    pub fn stuck_digest_intro(self, count: usize) -> String {
+        match self {
+            Lang::En if count == 1 => "You still have 1 download stuck:".to_owned(),
+            Lang::En => format!("You still have {count} downloads stuck:"),
+            Lang::Fr if count == 1 => "Tu as toujours 1 téléchargement bloqué :".to_owned(),
+            Lang::Fr => format!("Tu as toujours {count} téléchargements bloqués :"),
+        }
+    }
 }
 
 impl fmt::Display for Lang {
@@ -428,6 +502,40 @@ mod tests {
                 Lang::En.watch_stopped_for("q", 7),
                 Lang::Fr.watch_stopped_for("q", 7),
             ),
+            (Lang::En.download_ready("q"), Lang::Fr.download_ready("q")),
+            (Lang::En.stuck_none().into(), Lang::Fr.stuck_none().into()),
+            (Lang::En.stuck_title().into(), Lang::Fr.stuck_title().into()),
+            (
+                Lang::En.stuck_placeholder().into(),
+                Lang::Fr.stuck_placeholder().into(),
+            ),
+            (
+                Lang::En.stuck_already_flagged().into(),
+                Lang::Fr.stuck_already_flagged().into(),
+            ),
+            (Lang::En.stuck_marked("q"), Lang::Fr.stuck_marked("q")),
+            (Lang::En.stuck_prompt("q"), Lang::Fr.stuck_prompt("q")),
+            (
+                Lang::En.stuck_search_again_button().into(),
+                Lang::Fr.stuck_search_again_button().into(),
+            ),
+            (
+                Lang::En.stuck_remove_button().into(),
+                Lang::Fr.stuck_remove_button().into(),
+            ),
+            (Lang::En.stuck_removed("q"), Lang::Fr.stuck_removed("q")),
+            (
+                Lang::En.stuck_digest_title().into(),
+                Lang::Fr.stuck_digest_title().into(),
+            ),
+            (
+                Lang::En.stuck_digest_intro(1),
+                Lang::Fr.stuck_digest_intro(1),
+            ),
+            (
+                Lang::En.stuck_digest_intro(3),
+                Lang::Fr.stuck_digest_intro(3),
+            ),
         ];
 
         for (en, fr) in pairs {
@@ -459,6 +567,12 @@ mod tests {
             (Lang::Fr.watchlist_owner(4242), vec!["4242"]),
             (Lang::Fr.watchlist_more(3), vec!["3"]),
             (Lang::Fr.watch_stopped_for("dune", 7), vec!["dune", "<@7>"]),
+            (Lang::Fr.download_ready("dune"), vec!["dune"]),
+            (Lang::Fr.stuck_marked("dune"), vec!["dune"]),
+            (Lang::Fr.stuck_prompt("dune"), vec!["dune"]),
+            (Lang::Fr.stuck_removed("dune"), vec!["dune"]),
+            (Lang::Fr.stuck_digest_intro(1), vec!["1"]),
+            (Lang::Fr.stuck_digest_intro(3), vec!["3"]),
         ];
 
         for (rendered, expected) in cases {

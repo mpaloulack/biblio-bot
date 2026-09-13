@@ -1,6 +1,7 @@
 //! Pure builders. Keeping the decisions here is what makes them testable
 //! without a Discord connection.
 
+use crate::downloads::Download;
 use crate::i18n::Lang;
 use crate::prowlarr::Release;
 use crate::qbittorrent::Category;
@@ -247,6 +248,73 @@ pub fn admin_watchlist_options(
                 .description(truncate(&description, LABEL_MAX))
         })
         .collect()
+}
+
+pub fn stuck_options(downloads: &[Download], lang: Lang) -> Vec<serenity::CreateSelectMenuOption> {
+    downloads
+        .iter()
+        .map(|d| {
+            let description = if d.stuck_marked_at.is_some() {
+                format!("{} · {}", d.query, lang.stuck_already_flagged())
+            } else {
+                d.query.clone()
+            };
+            serenity::CreateSelectMenuOption::new(truncate(&d.title, LABEL_MAX), d.id.to_string())
+                .description(truncate(&description, LABEL_MAX))
+        })
+        .collect()
+}
+
+pub fn stuck_list_embed(downloads: &[Download], lang: Lang) -> serenity::CreateEmbed {
+    let description = downloads
+        .iter()
+        .map(|d| {
+            let flag = if d.stuck_marked_at.is_some() {
+                format!(" — {}", lang.stuck_already_flagged())
+            } else {
+                String::new()
+            };
+            format!("**{}**{flag}\n     {}", truncate(&d.title, 80), d.query)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    serenity::CreateEmbed::new()
+        .title(lang.stuck_title())
+        .description(description)
+        .colour(BLUE)
+}
+
+/// Sent once a day for whatever is still flagged; no components, since
+/// resolving happens through `/stuck` rather than from the notification.
+pub fn stuck_digest_embed(downloads: &[Download], lang: Lang) -> serenity::CreateEmbed {
+    let titles = downloads
+        .iter()
+        .map(|d| format!("• **{}**", truncate(&d.title, 80)))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    serenity::CreateEmbed::new()
+        .title(lang.stuck_digest_title())
+        .description(format!(
+            "{}\n{titles}",
+            lang.stuck_digest_intro(downloads.len())
+        ))
+        .colour(GREY)
+}
+
+/// Offered once a download already flagged as stuck is picked again.
+pub fn stuck_actions(custom_id: &str, lang: Lang) -> serenity::CreateActionRow {
+    serenity::CreateActionRow::Buttons(vec![
+        serenity::CreateButton::new(format!("{custom_id}:search"))
+            .style(serenity::ButtonStyle::Primary)
+            .emoji('🔁')
+            .label(lang.stuck_search_again_button()),
+        serenity::CreateButton::new(format!("{custom_id}:remove"))
+            .style(serenity::ButtonStyle::Danger)
+            .emoji('🗑')
+            .label(lang.stuck_remove_button()),
+    ])
 }
 
 pub fn status_embed(
@@ -738,6 +806,110 @@ mod tests {
             value[0]["label"].as_str().unwrap().chars().count(),
             LABEL_MAX
         );
+    }
+
+    fn download(title: &str, query: &str, stuck: bool) -> Download {
+        Download {
+            id: 1,
+            user_id: 42,
+            channel_id: 100,
+            guild_id: Some(1),
+            query: query.to_owned(),
+            title: title.to_owned(),
+            tag: "biblio-1".to_owned(),
+            added_at: 0,
+            last_checked_at: 0,
+            lang: Lang::En,
+            stuck_marked_at: if stuck { Some(10) } else { None },
+            last_digest_at: None,
+        }
+    }
+
+    #[test]
+    fn stuck_options_flag_already_marked_downloads() {
+        let downloads = [
+            download("Dune", "dune", false),
+            download("Hyperion", "hyperion", true),
+        ];
+        let value = serde_json::to_value(stuck_options(&downloads, Lang::En)).unwrap();
+
+        assert_eq!(value[0]["label"], "Dune");
+        assert_eq!(value[0]["description"], "dune");
+        assert!(
+            value[1]["description"]
+                .as_str()
+                .unwrap()
+                .contains("already flagged"),
+            "got: {value}"
+        );
+    }
+
+    #[test]
+    fn stuck_options_respect_the_discord_length_limit() {
+        let downloads = [download(&"z".repeat(250), "q", false)];
+        let value = serde_json::to_value(stuck_options(&downloads, Lang::En)).unwrap();
+        assert_eq!(
+            value[0]["label"].as_str().unwrap().chars().count(),
+            LABEL_MAX
+        );
+    }
+
+    #[test]
+    fn stuck_list_embed_lists_titles_and_marks_flagged_ones() {
+        let downloads = [
+            download("Dune", "dune", false),
+            download("Hyperion", "hyperion", true),
+        ];
+        let value = json(stuck_list_embed(&downloads, Lang::En));
+        let description = value["description"].as_str().unwrap();
+
+        assert_eq!(value["title"], "Your downloads");
+        assert!(description.contains("Dune"));
+        assert!(description.contains("Hyperion"));
+        assert!(
+            description.contains("already flagged"),
+            "got: {description}"
+        );
+    }
+
+    #[test]
+    fn stuck_digest_embed_counts_and_lists_every_entry() {
+        let downloads = [
+            download("Dune", "dune", true),
+            download("Hyperion", "hyperion", true),
+        ];
+        let value = json(stuck_digest_embed(&downloads, Lang::En));
+        let description = value["description"].as_str().unwrap();
+
+        assert!(
+            description.contains("2 downloads stuck"),
+            "got: {description}"
+        );
+        assert!(description.contains("Dune"));
+        assert!(description.contains("Hyperion"));
+    }
+
+    #[test]
+    fn stuck_digest_embed_uses_the_singular_for_one() {
+        let downloads = [download("Dune", "dune", true)];
+        let value = json(stuck_digest_embed(&downloads, Lang::En));
+        assert!(
+            value["description"]
+                .as_str()
+                .unwrap()
+                .contains("1 download stuck"),
+        );
+    }
+
+    #[test]
+    fn stuck_actions_carry_distinct_custom_ids() {
+        let value = serde_json::to_value(stuck_actions("stuck-act:7", Lang::En)).unwrap();
+        let buttons = &value["components"];
+
+        assert_eq!(buttons[0]["custom_id"], "stuck-act:7:search");
+        assert_eq!(buttons[1]["custom_id"], "stuck-act:7:remove");
+        assert_eq!(buttons[0]["label"], Lang::En.stuck_search_again_button());
+        assert_eq!(buttons[1]["label"], Lang::En.stuck_remove_button());
     }
 
     #[test]

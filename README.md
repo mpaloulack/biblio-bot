@@ -24,12 +24,13 @@ Discord language.
 | Command | What it does |
 | --- | --- |
 | `/search <query>` | Searches the configured categories, lists results by seeders, and offers a menu. Picking an entry sends it straight to qBittorrent. |
+| `/stuck` | Lists your downloads in progress. Flags one as stuck, or resolves one already flagged — remove it, or search again for another release. |
 | `/watchlist` | Lists the standing searches still running for you, and stops one. |
 | `/watchlist-all` | Moderators only: lists every standing search on the server, whoever started it, and stops any of them. |
 | `/status` | Checks that Prowlarr and qBittorrent answer, and shows which category and folder downloads will land in. |
 
-French users get `/livre`, `/veilles`, `/veilles-serveur` and `/etat`, with
-French replies. The language follows
+French users get `/livre`, `/bloque`, `/veilles`, `/veilles-serveur` and `/etat`,
+with French replies. The language follows
 each user's own Discord locale, so the same bot can serve both in one server.
 `DEFAULT_LOCALE` decides what everyone else gets.
 
@@ -58,6 +59,47 @@ re-checks the permission when it runs rather than trusting that.
 
 The list is a plain JSON file — readable and editable from the host — kept on
 the `/data` volume so it survives a restart.
+
+## Downloads that finish, and downloads that do not
+
+Handing a release to qBittorrent used to be the end of it: whether the file
+ever arrived was something you found out by opening qBittorrent yourself.
+
+Every download the bot sends is now tracked until it is done. It posts in the
+channel it came from, mentioning you, once the torrent has finished and
+started seeding — checked every five minutes by default.
+
+Some downloads never get there. A release with no live seeders sits at a few
+percent forever, and the bot cannot tell that apart from one that is merely
+slow, so it does not guess: **you** say so. `/stuck` lists what is in
+progress and flags the one that is going nowhere.
+
+From then on the bot reminds you about it once a day, in the same channel,
+until it is resolved. Running `/stuck` again and picking a flagged entry
+offers two ways out:
+
+- **Search again** — deletes the stalled torrent and its partial files, then
+  re-runs the original search so you can pick a different release. The query
+  is kept with the download for exactly this.
+- **Remove** — deletes it and stops tracking, without searching again.
+
+A flagged download is still checked for completion like any other, so one that
+turns out to be slow rather than dead resolves itself and tells you.
+
+Tracked downloads live in their own JSON file next to the standing searches,
+on the same `/data` volume.
+
+### Finding a torrent again
+
+qBittorrent's add endpoint never answers with the hash of what it just added,
+which leaves nothing obvious to follow a download by. Computing the info-hash
+before sending is possible, but it means bencode parsing for `.torrent`
+uploads and separate handling for magnets.
+
+The bot tags instead: every download is added with a unique tag, and one
+`torrents/info` call per sweep returns every torrent with its tags, so one
+request covers all of them however many are in flight. It also means a
+download the bot is tracking is recognisable in the qBittorrent UI.
 
 ## Requirements
 
@@ -105,6 +147,8 @@ mv .env.example .env
 | `WATCH_MAX_DAYS` | no | `30` | A standing search gives up after this many days, 1–365. |
 | `WATCH_MAX_PER_USER` | no | `10` | Per-user limit on standing searches, 1–100. |
 | `WATCHLIST_PATH` | no | `/data/watchlist.json` | Where the list is stored. The image already points this at its volume. |
+| `DOWNLOAD_CHECK_INTERVAL_SECS` | no | `300` | How often tracked downloads are checked for having finished, 60–3600. |
+| `DOWNLOADS_PATH` | no | `/data/downloads.json` | Where tracked downloads are stored, same convention as `WATCHLIST_PATH`. |
 
 ### 4. Run
 
@@ -119,8 +163,10 @@ docker run -d --name biblio-bot --restart unless-stopped \
   --env-file .env -v biblio-data:/data ghcr.io/mpaloulack/biblio-bot:latest
 ```
 
-The `/data` volume holds the standing searches. Without it they are lost on
-every restart; everything else the bot does is stateless.
+The `/data` volume holds the standing searches and the downloads being tracked.
+Without it both are lost on every restart — a download in flight stops being
+watched, and nothing announces it when it lands. Everything else the bot does is
+stateless.
 
 Images are published for `linux/amd64` and `linux/arm64`. Tags: `latest` for the
 newest release, `X.Y.Z` to pin one, `edge` for the tip of `main`.
@@ -157,27 +203,30 @@ cargo fmt                                  # format
 
 ```
 src/
-  main.rs          bootstrap only
-  lib.rs           module wiring and shared state
-  config.rs        environment parsing and validation
-  i18n.rs          every user-facing string, English and French
-  prowlarr.rs      search and .torrent retrieval
-  qbittorrent.rs   session, categories, adding downloads
-  watchlist.rs     standing searches: scheduling rules and storage
-  ui.rs            embeds and menus — pure functions
-  commands/        Discord interaction lifecycle
-  watcher.rs       background sweep over due searches
+  main.rs              bootstrap only
+  lib.rs               module wiring and shared state
+  config.rs            environment parsing and validation
+  i18n.rs              every user-facing string, English and French
+  prowlarr.rs          search and .torrent retrieval
+  qbittorrent.rs       session, categories, adding and deleting downloads
+  watchlist.rs         standing searches: scheduling rules and storage
+  downloads.rs         tracked downloads: stuck flagging and storage
+  ui.rs                embeds and menus — pure functions
+  commands/            Discord interaction lifecycle
+  watcher.rs           background sweep over due searches
+  download_watcher.rs  background sweep over downloads in flight
 ```
 
-The split is deliberate: `commands/` and `watcher.rs` hold the gateway glue,
+The split is deliberate: `commands/` and the two watchers hold the gateway glue,
 which cannot run without a live Discord connection, and delegate every decision
-they make to `ui.rs` and `watchlist.rs`. Everything else is unit tested against
-a mock HTTP server, including both qBittorrent API generations, the redirect
-handling for magnet links, and the scheduling rules for standing searches.
+they make to `ui.rs`, `watchlist.rs` and `downloads.rs`. Everything else is unit
+tested against a mock HTTP server, including both qBittorrent API generations,
+the redirect handling for magnet links, the scheduling rules for standing
+searches, and the daily gate on stuck reminders.
 
-Coverage is measured over that testable surface — `src/main.rs`, `src/commands/`
-and `src/watcher.rs` are excluded — and CI fails below 95%. It currently sits at
-99.8% of lines.
+Coverage is measured over that testable surface — `src/main.rs`, `src/commands/`,
+`src/watcher.rs` and `src/download_watcher.rs` are excluded — and CI fails below
+95%. It currently sits at 99.7% of lines.
 
 ## Contributing
 
