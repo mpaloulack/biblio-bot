@@ -3,8 +3,10 @@
 
 mod search;
 mod status;
+mod stuck;
 mod watchlist;
 
 pub use search::search;
 pub use status::status;
+pub use stuck::stuck;
 pub use watchlist::{watchlist, watchlist_all};

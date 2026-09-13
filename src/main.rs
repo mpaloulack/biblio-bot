@@ -1,10 +1,11 @@
 //! Bootstrap only; everything testable lives in the library crate.
 
 use anyhow::{Context as _, Result};
+use biblio_bot::downloads::Downloads;
 use biblio_bot::watchlist::Watchlist;
 use biblio_bot::{
-    Context, Data, Error, commands, config::Config, prowlarr::Prowlarr, qbittorrent::QBittorrent,
-    watcher,
+    Context, Data, Error, commands, config::Config, download_watcher, prowlarr::Prowlarr,
+    qbittorrent::QBittorrent, watcher,
 };
 use poise::serenity_prelude as serenity;
 use std::sync::Arc;
@@ -24,11 +25,13 @@ async fn main() -> Result<()> {
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting");
     tracing::info!("{}", config.summary());
     let prowlarr = Prowlarr::new(&config.prowlarr_url, &config.prowlarr_api_key)?;
-    let qbit = QBittorrent::new(
+    // Arc'd: shared with the download sweep below, so both use the same
+    // logged-in session instead of each holding an independent one.
+    let qbit = Arc::new(QBittorrent::new(
         &config.qbit_url,
         config.qbit_user.clone(),
         config.qbit_pass.clone(),
-    )?;
+    )?);
 
     // Fail now rather than on the first command.
     let version = prowlarr
@@ -48,16 +51,28 @@ async fn main() -> Result<()> {
         path = %config.watchlist_path.display(),
         "watchlist loaded"
     );
+    let downloads = Arc::new(Downloads::load(&config.downloads_path).await?);
+    tracing::info!(
+        downloads = downloads.with(|s| s.len()).await,
+        path = %config.downloads_path.display(),
+        "downloads loaded"
+    );
 
     let token = config.discord_token.clone();
     let guild_id = config.guild_id;
     // Moved into the setup closure, which is where a gateway http client exists.
-    let sweep = (prowlarr.clone(), Arc::clone(&watchlist), config.clone());
+    let watch_sweep = (prowlarr.clone(), Arc::clone(&watchlist), config.clone());
+    let download_sweep = (
+        Arc::clone(&qbit),
+        Arc::clone(&downloads),
+        config.download_check_interval_secs,
+    );
     let data = Data {
         config,
         prowlarr,
         qbit,
         watchlist,
+        downloads,
     };
 
     let framework = poise::Framework::builder()
@@ -65,6 +80,7 @@ async fn main() -> Result<()> {
             commands: vec![
                 commands::search(),
                 commands::status(),
+                commands::stuck(),
                 commands::watchlist(),
                 commands::watchlist_all(),
             ],
@@ -92,8 +108,15 @@ async fn main() -> Result<()> {
                         tracing::info!("commands registered globally");
                     }
                 }
-                let (prowlarr, watchlist, config) = sweep;
+                let (prowlarr, watchlist, config) = watch_sweep;
                 tokio::spawn(watcher::run(ctx.http.clone(), prowlarr, watchlist, config));
+                let (qbit, downloads, interval_secs) = download_sweep;
+                tokio::spawn(download_watcher::run(
+                    ctx.http.clone(),
+                    qbit,
+                    downloads,
+                    interval_secs,
+                ));
 
                 tracing::info!(bot = %ready.user.name, "connected");
                 Ok(data)

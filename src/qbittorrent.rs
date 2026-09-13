@@ -18,6 +18,27 @@ pub struct Category {
     pub save_path: String,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TorrentInfo {
+    pub hash: String,
+    /// Comma-separated; qBittorrent has no structured tag list in this payload.
+    #[serde(default)]
+    pub tags: String,
+    #[serde(default)]
+    pub progress: f64,
+}
+
+impl TorrentInfo {
+    pub fn has_tag(&self, tag: &str) -> bool {
+        self.tags.split(',').any(|t| t.trim() == tag)
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.progress >= 1.0
+    }
+}
+
 #[derive(Debug)]
 pub struct QBittorrent {
     http: reqwest::Client,
@@ -114,6 +135,7 @@ impl QBittorrent {
         category: &str,
         save_path: Option<&str>,
         paused: bool,
+        tag: Option<&str>,
     ) -> Result<String> {
         self.ensure_session().await?;
 
@@ -130,6 +152,9 @@ impl QBittorrent {
         let mut form = multipart::Form::new().text("category", category.to_owned());
         if !resolved.is_empty() {
             form = form.text("savepath", resolved.clone());
+        }
+        if let Some(tag) = tag {
+            form = form.text("tags", tag.to_owned());
         }
         if paused {
             // `paused` is 4.x, `stopped` is 5.x.
@@ -159,6 +184,51 @@ impl QBittorrent {
             bail!("qBittorrent refused the download: {}", body.trim());
         }
         Ok(resolved)
+    }
+
+    /// Every torrent qBittorrent knows about. There is no per-torrent lookup
+    /// by tag in older API versions, so callers match client-side.
+    pub async fn info(&self) -> Result<Vec<TorrentInfo>> {
+        self.ensure_session().await?;
+        let resp = self
+            .http
+            .get(format!("{}/api/v2/torrents/info", self.base))
+            .send()
+            .await
+            .context("qBittorrent is unreachable")?;
+        reject_forbidden(&resp)?;
+        resp.error_for_status()?
+            .json()
+            .await
+            .context("unexpected torrents/info payload")
+    }
+
+    pub async fn delete(&self, hashes: &[String], delete_files: bool) -> Result<()> {
+        self.ensure_session().await?;
+        let resp = self
+            .http
+            .post(format!("{}/api/v2/torrents/delete", self.base))
+            .form(&[
+                ("hashes", hashes.join("|")),
+                ("deleteFiles", delete_files.to_string()),
+            ])
+            .send()
+            .await
+            .context("qBittorrent is unreachable")?;
+        reject_forbidden(&resp)?;
+        resp.error_for_status()?;
+        Ok(())
+    }
+
+    /// Deletes the torrent tagged the way [`Self::add`] tagged it, files
+    /// included since this is used to drop a stuck or replaced download.
+    /// Returns whether anything matched.
+    pub async fn delete_by_tag(&self, tag: &str) -> Result<bool> {
+        let Some(found) = self.info().await?.into_iter().find(|t| t.has_tag(tag)) else {
+            return Ok(false);
+        };
+        self.delete(&[found.hash], true).await?;
+        Ok(true)
     }
 }
 
@@ -336,6 +406,7 @@ mod tests {
                 "ebooks",
                 None,
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -361,6 +432,7 @@ mod tests {
                 "ebooks",
                 Some("/elsewhere"),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -382,7 +454,13 @@ mod tests {
         mock_add(&server, "Ok.").await;
 
         let saved = anonymous(&server)
-            .add(&Download::Magnet("magnet:?x".into()), "ebooks", None, false)
+            .add(
+                &Download::Magnet("magnet:?x".into()),
+                "ebooks",
+                None,
+                false,
+                None,
+            )
             .await
             .unwrap();
 
@@ -402,6 +480,7 @@ mod tests {
                 "missing",
                 None,
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -419,6 +498,7 @@ mod tests {
                 "ebooks",
                 Some("/data"),
                 true,
+                None,
             )
             .await
             .unwrap();
@@ -439,6 +519,7 @@ mod tests {
                 "ebooks",
                 Some("/data"),
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -463,7 +544,8 @@ mod tests {
                     &Download::Magnet("magnet:?x".into()),
                     "ebooks",
                     Some("/data"),
-                    false
+                    false,
+                    None,
                 )
                 .await
                 .is_ok()
@@ -481,6 +563,7 @@ mod tests {
                 "ebooks",
                 Some("/data"),
                 false,
+                None,
             )
             .await
             .unwrap_err()
@@ -503,6 +586,7 @@ mod tests {
                 "ebooks",
                 Some("/data"),
                 false,
+                None,
             )
             .await
             .unwrap_err()
@@ -525,11 +609,171 @@ mod tests {
                     &Download::Magnet("magnet:?x".into()),
                     "ebooks",
                     Some("/data"),
-                    false
+                    false,
+                    None,
                 )
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn add_sends_the_tag_when_given() {
+        let server = MockServer::start().await;
+        mock_add(&server, "Ok.").await;
+
+        anonymous(&server)
+            .add(
+                &Download::Magnet("magnet:?x".into()),
+                "ebooks",
+                Some("/data"),
+                false,
+                Some("biblio-7"),
+            )
+            .await
+            .unwrap();
+
+        assert!(add_request_body(&server).await.contains("biblio-7"));
+    }
+
+    #[tokio::test]
+    async fn add_omits_the_tag_field_when_none() {
+        let server = MockServer::start().await;
+        mock_add(&server, "Ok.").await;
+
+        anonymous(&server)
+            .add(
+                &Download::Magnet("magnet:?x".into()),
+                "ebooks",
+                Some("/data"),
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(!add_request_body(&server).await.contains("tags"));
+    }
+
+    async fn mock_info(server: &MockServer, torrents: serde_json::Value) {
+        Mock::given(method("GET"))
+            .and(path("/api/v2/torrents/info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(torrents))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn info_parses_hash_tags_and_progress() {
+        let server = MockServer::start().await;
+        mock_info(
+            &server,
+            json!([
+                { "hash": "abc", "tags": "biblio-7, other", "progress": 0.42 },
+            ]),
+        )
+        .await;
+
+        let torrents = anonymous(&server).info().await.unwrap();
+        assert_eq!(torrents.len(), 1);
+        assert_eq!(torrents[0].hash, "abc");
+        assert!(torrents[0].has_tag("biblio-7"));
+        assert!(!torrents[0].has_tag("biblio-8"));
+        assert!(!torrents[0].is_finished());
+    }
+
+    #[tokio::test]
+    async fn a_progress_of_one_is_finished() {
+        let server = MockServer::start().await;
+        mock_info(
+            &server,
+            json!([{ "hash": "abc", "tags": "biblio-7", "progress": 1.0 }]),
+        )
+        .await;
+
+        assert!(anonymous(&server).info().await.unwrap()[0].is_finished());
+    }
+
+    #[tokio::test]
+    async fn info_surfaces_a_403() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/torrents/info"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+
+        assert!(anonymous(&server).info().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_sends_hashes_and_the_delete_files_flag() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v2/torrents/delete"))
+            .and(body_string_contains("hashes=abc%7Cdef"))
+            .and(body_string_contains("deleteFiles=true"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        anonymous(&server)
+            .delete(&["abc".to_owned(), "def".to_owned()], true)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delete_surfaces_a_403() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v2/torrents/delete"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+
+        let error = anonymous(&server)
+            .delete(&["abc".to_owned()], true)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("403"), "got: {error}");
+    }
+
+    #[tokio::test]
+    async fn delete_by_tag_removes_the_matching_torrent() {
+        let server = MockServer::start().await;
+        mock_info(
+            &server,
+            json!([
+                { "hash": "abc", "tags": "biblio-7", "progress": 0.5 },
+                { "hash": "def", "tags": "biblio-8", "progress": 0.5 },
+            ]),
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v2/torrents/delete"))
+            .and(body_string_contains("hashes=abc"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        assert!(anonymous(&server).delete_by_tag("biblio-7").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn delete_by_tag_is_a_noop_when_nothing_matches() {
+        let server = MockServer::start().await;
+        mock_info(&server, json!([])).await;
+
+        assert!(!anonymous(&server).delete_by_tag("biblio-7").await.unwrap());
+        let deleted = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.url.path() == "/api/v2/torrents/delete");
+        assert!(!deleted, "nothing matched, nothing should be deleted");
     }
 
     #[tokio::test]

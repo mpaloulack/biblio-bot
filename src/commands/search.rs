@@ -1,3 +1,4 @@
+use crate::downloads::NewDownload;
 use crate::i18n::Lang;
 use crate::prowlarr::Release;
 use crate::watchlist::{NewWatch, RejectedWatch, now_secs};
@@ -23,26 +24,33 @@ pub async fn search(
     query: String,
 ) -> Result<(), Error> {
     ctx.defer().await?;
+    let lang = Lang::from_locale(ctx.locale(), ctx.data().config.default_locale);
+    run_search(ctx, &query, lang).await
+}
+
+/// Runs a search end to end: shows the picker, sends the pick to
+/// qBittorrent. Split out of [`search`] so `/stuck`'s "search again" can
+/// re-run a stored query without duplicating this whole flow.
+pub(crate) async fn run_search(ctx: Context<'_>, query: &str, lang: Lang) -> Result<(), Error> {
     let data = ctx.data();
-    let lang = Lang::from_locale(ctx.locale(), data.config.default_locale);
 
     let mut results = data
         .prowlarr
-        .search(&query, &data.config.search_categories, SEARCH_LIMIT)
+        .search(query, &data.config.search_categories, SEARCH_LIMIT)
         .await?;
     let found = results.len();
     results.truncate(data.config.max_results);
     tracing::info!(query = %query, found, offered = results.len(), "search completed");
 
     if results.is_empty() {
-        return offer_to_watch(ctx, &query, lang).await;
+        return offer_to_watch(ctx, query, lang).await;
     }
 
     let custom_id = format!("search:{}", ctx.id());
     let handle = ctx
         .send(
             poise::CreateReply::default()
-                .embed(ui::results_embed(&query, &results, lang))
+                .embed(ui::results_embed(query, &results, lang))
                 .components(vec![serenity::CreateActionRow::SelectMenu(
                     serenity::CreateSelectMenu::new(
                         &custom_id,
@@ -71,7 +79,7 @@ pub async fn search(
                 ctx,
                 poise::CreateReply::default()
                     .content(lang.selection_timed_out())
-                    .embed(ui::expired_embed(&query, &results, lang))
+                    .embed(ui::expired_embed(query, &results, lang))
                     .components(vec![]),
             )
             .await?;
@@ -97,7 +105,7 @@ pub async fn search(
         .create_response(ctx, serenity::CreateInteractionResponse::Acknowledge)
         .await?;
 
-    let (embed, note) = match send_to_client(ctx, picked).await {
+    let (embed, note) = match send_to_client(ctx, picked, query, lang).await {
         Ok(save_path) => {
             tracing::info!(
                 title = %picked.title,
@@ -109,7 +117,7 @@ pub async fn search(
             // user was keeping for these words.
             let fulfilled = data
                 .watchlist
-                .update(|state| state.fulfil(ctx.author().id.get(), &query))
+                .update(|state| state.fulfil(ctx.author().id.get(), query))
                 .await?;
             let note = fulfilled
                 .first()
@@ -145,12 +153,54 @@ pub async fn search(
     Ok(())
 }
 
-async fn send_to_client(ctx: Context<'_>, release: &Release) -> anyhow::Result<String> {
+/// Reserves a [`crate::downloads::Download`] record before handing the
+/// release to qBittorrent, tagging the torrent with it so the background
+/// sweep can find it again later. Rolls the reservation back if the send
+/// fails, so a failed download never leaves a phantom tracked entry.
+async fn send_to_client(
+    ctx: Context<'_>,
+    release: &Release,
+    query: &str,
+    lang: Lang,
+) -> anyhow::Result<String> {
     let data = ctx.data();
     let download = data.prowlarr.fetch(release).await?;
-    data.qbit
-        .add(&download, &data.config.qbit_category, None, false)
+
+    let record = data
+        .downloads
+        .update(|s| {
+            s.add(
+                NewDownload {
+                    user_id: ctx.author().id.get(),
+                    channel_id: ctx.channel_id().get(),
+                    guild_id: ctx.guild_id().map(|g| g.get()),
+                    query: query.to_owned(),
+                    title: release.title.clone(),
+                    lang,
+                },
+                now_secs(),
+            )
+            .clone()
+        })
+        .await?;
+
+    match data
+        .qbit
+        .add(
+            &download,
+            &data.config.qbit_category,
+            None,
+            false,
+            Some(&record.tag),
+        )
         .await
+    {
+        Ok(save_path) => Ok(save_path),
+        Err(e) => {
+            let _ = data.downloads.update(|s| s.take(record.id)).await;
+            Err(e)
+        }
+    }
 }
 
 /// A search that found nothing can be left running instead of being retyped later.
