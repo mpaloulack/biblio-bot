@@ -32,6 +32,7 @@ pub async fn watchlist(ctx: Context<'_>) -> Result<(), Error> {
         .with(|state| state.for_user(user_id).into_iter().cloned().collect())
         .await;
 
+    tracing::info!(user_id, watches = watches.len(), "listing own watches");
     let embed = ui::watchlist_embed(&watches, now_secs(), data.config.watch_max_age_secs(), lang);
     let options = ui::watchlist_options(&watches, lang);
     show_and_stop(ctx, lang, embed, options, &watches, Scope::Own(user_id)).await
@@ -68,6 +69,11 @@ pub async fn watchlist_all(ctx: Context<'_>) -> Result<(), Error> {
         .with(|state| state.for_guild(guild_id).into_iter().cloned().collect())
         .await;
 
+    tracing::info!(
+        guild_id,
+        watches = watches.len(),
+        "listing every watch on the server"
+    );
     let embed =
         ui::admin_watchlist_embed(&watches, now_secs(), data.config.watch_max_age_secs(), lang);
     let options = ui::admin_watchlist_options(&watches, lang);
@@ -147,6 +153,17 @@ async fn show_and_stop(
             Scope::Guild(guild_id) => state.remove_within_guild(id, guild_id),
         })
         .await?;
+
+    match &removed {
+        Some(watch) => tracing::info!(
+            watch = watch.id,
+            query = %watch.query,
+            owner = watch.user_id,
+            by = ctx.author().id.get(),
+            "watch stopped"
+        ),
+        None => tracing::warn!(watch = id, "watch to stop was not found or not allowed"),
+    }
 
     let content = match (removed, scope) {
         (Some(watch), Scope::Own(_)) => lang.watch_stopped(&watch.query),

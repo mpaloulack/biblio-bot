@@ -3,7 +3,8 @@
 use anyhow::{Context as _, Result};
 use biblio_bot::watchlist::Watchlist;
 use biblio_bot::{
-    Data, Error, commands, config::Config, prowlarr::Prowlarr, qbittorrent::QBittorrent, watcher,
+    Context, Data, Error, commands, config::Config, prowlarr::Prowlarr, qbittorrent::QBittorrent,
+    watcher,
 };
 use poise::serenity_prelude as serenity;
 use std::sync::Arc;
@@ -20,6 +21,8 @@ async fn main() -> Result<()> {
         .init();
 
     let config = Config::from_env()?;
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting");
+    tracing::info!("{}", config.summary());
     let prowlarr = Prowlarr::new(&config.prowlarr_url, &config.prowlarr_api_key)?;
     let qbit = QBittorrent::new(
         &config.qbit_url,
@@ -65,6 +68,8 @@ async fn main() -> Result<()> {
                 commands::watchlist(),
                 commands::watchlist_all(),
             ],
+            pre_command: |ctx| Box::pin(log_invocation(ctx)),
+            post_command: |ctx| Box::pin(log_completion(ctx)),
             on_error: |error| Box::pin(on_error(error)),
             ..Default::default()
         })
@@ -112,6 +117,32 @@ async fn main() -> Result<()> {
 
     client.start().await.context("the Discord client stopped")?;
     Ok(())
+}
+
+async fn log_invocation(ctx: Context<'_>) {
+    ctx.set_invocation_data(std::time::Instant::now()).await;
+    tracing::info!(
+        command = %ctx.command().qualified_name,
+        user = %ctx.author().name,
+        user_id = ctx.author().id.get(),
+        guild = ctx.guild_id().map_or(0, |g| g.get()),
+        channel = ctx.channel_id().get(),
+        "command received"
+    );
+}
+
+async fn log_completion(ctx: Context<'_>) {
+    // Includes however long the user took to pick from a menu, so it says how
+    // long the whole exchange lasted rather than how much work was done.
+    let elapsed = ctx
+        .invocation_data::<std::time::Instant>()
+        .await
+        .map_or(0, |start| start.elapsed().as_millis());
+    tracing::info!(
+        command = %ctx.command().qualified_name,
+        elapsed_ms = elapsed,
+        "command completed"
+    );
 }
 
 async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
