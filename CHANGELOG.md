@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-09-13
+
+### Changed
+
+- **A search is now a private conversation.** `/search` replies only to the
+  person who ran it: the result picker, "no result", an expired selection and
+  a failed hand-off to qBittorrent are all ephemeral. The channel keeps the
+  outcomes alone — one line when a download starts, one when a standing
+  search is created, and the existing notice when a download finishes.
+
+### Fixed
+
+- **Titles with accents were unreadable.** Some trackers publish a title whose
+  UTF-8 bytes were read as Latin-1 somewhere upstream, and Prowlarr passes it
+  on as published: `Une Ã©vidence (RentrÃ©e LittÃ©rature 2019)`. The bot now
+  undoes that as it reads the search results, and only where it cannot invent
+  anything — a title that was never mangled, one already correct, and one that
+  lost bytes for good are all left exactly as they are. Measured against 1500
+  real titles: 214 repaired, every remaining accent untouched.
+
 ## [0.2.0] — 2026-09-13
 
 Downloads no longer disappear once they are handed over: the bot follows them
@@ -94,5 +114,6 @@ silently otherwise:
   resolved and sent with every download.
 - `/torrents/add` answers `Ok.` on qBittorrent 4.x and a JSON object on 5.x.
 
+[0.2.1]: https://github.com/mpaloulack/biblio-bot/releases/tag/v0.2.1
 [0.2.0]: https://github.com/mpaloulack/biblio-bot/releases/tag/v0.2.0
 [0.1.0]: https://github.com/mpaloulack/biblio-bot/releases/tag/v0.1.0
