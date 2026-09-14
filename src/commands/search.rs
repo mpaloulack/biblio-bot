@@ -23,7 +23,7 @@ pub async fn search(
     #[description_localized("fr", "Titre, auteur, série…")]
     query: String,
 ) -> Result<(), Error> {
-    ctx.defer().await?;
+    ctx.defer_ephemeral().await?;
     let lang = Lang::from_locale(ctx.locale(), ctx.data().config.default_locale);
     run_search(ctx, &query, lang).await
 }
@@ -31,6 +31,10 @@ pub async fn search(
 /// Runs a search end to end: shows the picker, sends the pick to
 /// qBittorrent. Split out of [`search`] so `/stuck`'s "search again" can
 /// re-run a stored query without duplicating this whole flow.
+///
+/// Every reply here is ephemeral, including the ones `/stuck` triggers as
+/// follow-ups: a picker, a timeout and a failed add concern one person, and
+/// the channel only carries what [`announce`] posts.
 pub(crate) async fn run_search(ctx: Context<'_>, query: &str, lang: Lang) -> Result<(), Error> {
     let data = ctx.data();
 
@@ -50,6 +54,7 @@ pub(crate) async fn run_search(ctx: Context<'_>, query: &str, lang: Lang) -> Res
     let handle = ctx
         .send(
             poise::CreateReply::default()
+                .ephemeral(true)
                 .embed(ui::results_embed(query, &results, lang))
                 .components(vec![serenity::CreateActionRow::SelectMenu(
                     serenity::CreateSelectMenu::new(
@@ -123,6 +128,7 @@ pub(crate) async fn run_search(ctx: Context<'_>, query: &str, lang: Lang) -> Res
                 .first()
                 .map(|watch| lang.watch_fulfilled(&watch.query))
                 .unwrap_or_default();
+            announce(ctx, lang.announce_downloading(&picked.title)).await;
             (
                 ui::added_embed(picked, &data.config.qbit_category, &save_path, lang),
                 note,
@@ -209,6 +215,7 @@ async fn offer_to_watch(ctx: Context<'_>, query: &str, lang: Lang) -> Result<(),
     let handle = ctx
         .send(
             poise::CreateReply::default()
+                .ephemeral(true)
                 .content(lang.no_results(query))
                 .components(vec![ui::watch_button(&custom_id, lang)]),
         )
@@ -270,6 +277,7 @@ async fn offer_to_watch(ctx: Context<'_>, query: &str, lang: Lang) -> Result<(),
                 channel = ctx.channel_id().get(),
                 "watch created"
             );
+            announce(ctx, lang.announce_watching(query)).await;
             lang.watch_created(
                 query,
                 data.config.watch_checks_per_day,
@@ -294,4 +302,21 @@ async fn offer_to_watch(ctx: Context<'_>, query: &str, lang: Lang) -> Result<(),
         )
         .await?;
     Ok(())
+}
+
+/// Posts the one line the channel is meant to keep, mentioning whoever asked.
+/// Only an outcome earns it — a download handed over, a standing search
+/// created; everything else stays in the ephemeral reply. A channel the bot
+/// cannot post in must not fail the command: the user already has their
+/// answer.
+async fn announce(ctx: Context<'_>, content: String) {
+    let message =
+        serenity::CreateMessage::new().content(format!("<@{}> {content}", ctx.author().id));
+    if let Err(e) = ctx.channel_id().send_message(ctx.http(), message).await {
+        tracing::warn!(
+            channel = ctx.channel_id().get(),
+            %e,
+            "could not announce the outcome in the channel"
+        );
+    }
 }

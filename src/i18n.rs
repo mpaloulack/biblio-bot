@@ -74,6 +74,24 @@ impl Lang {
         self.pick("❌ Could not add the download", "❌ Échec de l'ajout")
     }
 
+    /// The single line the channel keeps when a download starts. It follows a
+    /// mention, so it reads as third person; the details stay in the private
+    /// reply to whoever asked.
+    pub fn announce_downloading(self, title: &str) -> String {
+        match self {
+            Lang::En => format!("📥 is downloading **{title}**."),
+            Lang::Fr => format!("📥 télécharge **{title}**."),
+        }
+    }
+
+    /// Same line, for a search left running instead of downloaded.
+    pub fn announce_watching(self, query: &str) -> String {
+        match self {
+            Lang::En => format!("👀 is now watching **{query}**."),
+            Lang::Fr => format!("👀 surveille maintenant **{query}**."),
+        }
+    }
+
     pub fn status_title(self) -> &'static str {
         self.pick("Service status", "État des services")
     }
@@ -431,6 +449,14 @@ mod tests {
                 Lang::Fr.failed_title().into(),
             ),
             (
+                Lang::En.announce_downloading("q"),
+                Lang::Fr.announce_downloading("q"),
+            ),
+            (
+                Lang::En.announce_watching("q"),
+                Lang::Fr.announce_watching("q"),
+            ),
+            (
                 Lang::En.status_title().into(),
                 Lang::Fr.status_title().into(),
             ),
@@ -557,6 +583,8 @@ mod tests {
                 Lang::Fr.watch_created("dune", 4, 30),
                 vec!["dune", "4", "30"],
             ),
+            (Lang::Fr.announce_downloading("dune"), vec!["dune"]),
+            (Lang::Fr.announce_watching("dune"), vec!["dune"]),
             (Lang::Fr.watch_already("dune"), vec!["dune"]),
             (Lang::Fr.watch_too_many(10), vec!["10"]),
             (Lang::Fr.watch_found("dune"), vec!["dune"]),
