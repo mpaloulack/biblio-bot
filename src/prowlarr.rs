@@ -4,11 +4,15 @@ use serde::Deserialize;
 use std::time::Duration;
 
 const MAX_REDIRECTS: usize = 5;
+/// Enough for a title that went through the bad decode twice; a third pass has
+/// never been seen and the loop stops on its own anyway.
+const MAX_REPAIR_PASSES: usize = 3;
 const TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Release {
+    #[serde(deserialize_with = "repaired")]
     pub title: String,
     pub guid: String,
     pub indexer_id: i64,
@@ -22,6 +26,62 @@ pub struct Release {
     pub magnet_url: Option<String>,
     #[serde(default)]
     pub protocol: String,
+}
+
+fn repaired<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    Ok(repair_mojibake(&raw))
+}
+
+/// Some trackers hand Prowlarr a title whose UTF-8 bytes were read as Latin-1
+/// somewhere upstream, so `é` reaches us as `Ã©`. Prowlarr passes it through
+/// verbatim — it is the title the tracker published — which leaves us as the
+/// last place able to make it readable.
+///
+/// The damage is undone by re-reading those characters as the bytes they
+/// originally were. It is only attempted where it cannot invent anything: see
+/// [`repaired_once`] for the two conditions that have to hold.
+fn repair_mojibake(text: &str) -> String {
+    let mut current = text.to_owned();
+    for _ in 0..MAX_REPAIR_PASSES {
+        match repaired_once(&current) {
+            Some(next) => current = next,
+            None => break,
+        }
+    }
+    current
+}
+
+/// One pass, or `None` when the text gives no reason to think it is damaged.
+///
+/// Two conditions have to hold, and together they are what makes this safe to
+/// run on every title:
+///
+/// - every character fits in a byte and those bytes are valid UTF-8. A title
+///   that was never mangled fails here almost always: `Et après` becomes
+///   `0xE8 0x73`, and `0xE8` announces two continuation bytes that `s` is not.
+/// - the result is shorter. Mojibake turns one character into two or more, so
+///   a decode that shrinks nothing matched a coincidence rather than the
+///   damage, and is thrown away.
+///
+/// A title only partly mangled — `Musso â Mai`, where the two unprintable
+/// bytes of the dash were dropped before it reached the tracker — fails the
+/// first condition and is left as it is. Nothing can bring back bytes that are
+/// gone.
+fn repaired_once(text: &str) -> Option<String> {
+    if !text.chars().any(|c| ('\u{80}'..='\u{ff}').contains(&c)) {
+        return None;
+    }
+
+    let bytes: Vec<u8> = text
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)).ok())
+        .collect::<Option<_>>()?;
+    let decoded = String::from_utf8(bytes).ok()?;
+    (decoded.chars().count() < text.chars().count()).then_some(decoded)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +262,94 @@ mod tests {
             magnet_url: magnet.map(str::to_owned),
             protocol: "torrent".to_owned(),
         }
+    }
+
+    #[test]
+    fn a_title_mangled_upstream_is_made_readable_again() {
+        // Real titles, as the tracker published them.
+        for (mangled, expected) in [
+            (
+                "Une Ã©vidence - Agnes Martin-lugand (RentrÃ©e LittÃ©rature 2019) EPUB",
+                "Une évidence - Agnes Martin-lugand (Rentrée Littérature 2019) EPUB",
+            ),
+            (
+                "7 ans aprÃ¨s - Guillaume Musso - franÃ§ais - epub",
+                "7 ans après - Guillaume Musso - français - epub",
+            ),
+            // Upper case mangles to an unprintable second character rather
+            // than a visible one: `É` is `0xC3 0x89`, and `0x89` has no glyph.
+            // It is invisible in the Discord embed, not absent.
+            (
+                "ANGÃ\u{89}LIQUE - GUILLAUME MUSSO (RENTRÃ\u{89}E LITTÃ\u{89}RATURE 2022)",
+                "ANGÉLIQUE - GUILLAUME MUSSO (RENTRÉE LITTÉRATURE 2022)",
+            ),
+            // `à` mangles to `Ã` followed by a non-breaking space, which
+            // reads as an ordinary one and is a good way to get this wrong.
+            (
+                "AgnÃ¨s Martin-Lugand - DÃ©solÃ©e, je suis attendue [mp3 Ã\u{a0} 128 Kb/s]",
+                "Agnès Martin-Lugand - Désolée, je suis attendue [mp3 à 128 Kb/s]",
+            ),
+        ] {
+            assert_eq!(repair_mojibake(mangled), expected);
+        }
+    }
+
+    #[test]
+    fn a_title_that_was_never_mangled_is_returned_untouched() {
+        // The reason this is safe to run on everything: a correct accent
+        // almost never forms valid UTF-8 when read back as a byte, and the
+        // few sequences that could are rejected for not shrinking.
+        for intact in [
+            "Angélique.Guillaume.Musso.2022.fr.[ePub].-NoTag",
+            "Et.après.Guillaume.Musso.2003.fr.[ePub].-NOTAG",
+            "Mortelle.Adele.Roman.T02.Les.Bêtises.Fr.[EPUB]-NOTAG",
+            "Les Génies du Jazz - Le Jazz Moderne N°1 Flac-Lamifoto",
+            "The Parent Trap 1998 MULTi VF2 1080p WEB H264-FW (À nous quatre)",
+            "Kimi.wa.Meido-sama.E06.Més.Sol.Que.un.Mussol.WEBRip.x264",
+            "Arthur.C.Clarke.Intégrale.Science-Fiction.FRENCH.Epub-Notag",
+            "[2024.04.10]宇多田ヒカル オールタイムベストアルバム [FLAC]",
+            "😎Armelle - PARADIGME - 2025 - FLAC 16BITS 44 1KHZ-EICHBAUM",
+            "Dune.Frank.Herbert.1965.[EPUB]-NOTAG",
+            "",
+        ] {
+            assert_eq!(repair_mojibake(intact), intact);
+        }
+    }
+
+    #[test]
+    fn a_title_mangled_twice_is_unwound_both_times() {
+        assert_eq!(repair_mojibake("Une Ã\u{83}Â©vidence"), "Une évidence");
+    }
+
+    #[test]
+    fn a_title_missing_the_bytes_it_lost_is_left_alone() {
+        // The dash here was mangled into three characters and two of them —
+        // unprintable — were dropped before the tracker ever listed it. There
+        // is nothing left to rebuild from, and a half-repair would be worse
+        // than the honest original.
+        let lossy = "La vie est un roman - Guillaume Musso â Mai 2020 - epub";
+        assert_eq!(repair_mojibake(lossy), lossy);
+    }
+
+    #[tokio::test]
+    async fn search_repairs_the_titles_it_returns() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/search"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([release_json(
+                    "Une Ã©vidence (RentrÃ©e LittÃ©rature 2019) EPUB",
+                    5
+                )])),
+            )
+            .mount(&server)
+            .await;
+
+        let found = client(&server).search("q", &[7020], 10).await.unwrap();
+        assert_eq!(
+            found[0].title,
+            "Une évidence (Rentrée Littérature 2019) EPUB"
+        );
     }
 
     #[test]
