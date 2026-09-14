@@ -23,7 +23,7 @@ Discord language.
 
 | Command | What it does |
 | --- | --- |
-| `/search <query>` | Searches the configured categories, lists results by seeders, and offers a menu. Picking an entry sends it straight to qBittorrent. |
+| `/search <query>` | Searches the configured categories, lists results by seeders, and offers a menu. Picking an entry sends it straight to qBittorrent. Replies privately; only the outcome reaches the channel. |
 | `/stuck` | Lists your downloads in progress. Flags one as stuck, or resolves one already flagged — remove it, or search again for another release. |
 | `/watchlist` | Lists the standing searches still running for you, and stops one. |
 | `/watchlist-all` | Moderators only: lists every standing search on the server, whoever started it, and stops any of them. |
@@ -33,6 +33,23 @@ French users get `/livre`, `/bloque`, `/veilles`, `/veilles-serveur` and `/etat`
 with French replies. The language follows
 each user's own Discord locale, so the same bot can serve both in one server.
 `DEFAULT_LOCALE` decides what everyone else gets.
+
+## What the channel sees
+
+Every command answers the person who ran it and nobody else: the result
+picker, an expired selection, a search that found nothing and a hand-off
+qBittorrent refused are all ephemeral, and none of them outlive the reader.
+
+The channel keeps outcomes only, each mentioning whoever asked:
+
+- a download started,
+- a standing search created,
+- a download finished (see below),
+- a standing search that turned something up, expired, or is still stuck.
+
+The last group arrives long after the command that created it, with nobody
+waiting on an interaction, so it is posted in the channel the search came
+from rather than sent privately.
 
 ## Standing searches
 
