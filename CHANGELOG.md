@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-10-09
+
+### Security
+
+- **The image now applies Debian security updates.** `debian:bookworm-slim` still
+  shipped `perl-base` 5.36.0-7+deb12u3 (CVE-2026-13221, CVE-2026-42496,
+  CVE-2026-8376), fixed in deb12u4. The runtime stage runs `apt-get upgrade`
+  before installing, so the published image no longer carries them.
+
 ## [0.2.1] — 2026-09-13
 
 ### Changed

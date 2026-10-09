@@ -25,7 +25,10 @@ LABEL org.opencontainers.image.source="https://github.com/mpaloulack/biblio-bot"
       org.opencontainers.image.description="Discord bot that searches ebooks through Prowlarr and sends them to qBittorrent" \
       org.opencontainers.image.licenses="MIT"
 
+# apt-get upgrade is deliberate: the official Debian image trails the security
+# releases (perl-base was behind), so patches are applied on top of it.
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
